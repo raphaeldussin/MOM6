@@ -22,7 +22,7 @@ import subprocess
 #sys.path.insert(0, os.path.abspath('.'))
 
 # Create API documentation
-doxygenize = 'doxygen Doxyfile_rtd'
+doxygenize = 'doxygen Doxyfile_nortd'
 if os.path.exists('./doxygen/bin/doxygen'): doxygenize = './doxygen/bin/'+doxygenize
 return_code = subprocess.call(doxygenize, shell=True)
 if return_code != 0: sys.exit(return_code)
@@ -37,10 +37,10 @@ if return_code != 0: sys.exit(return_code)
 # ones.
 extensions = [
     'sphinx.ext.mathjax',
-    'breathe',
 ]
 
 autosummary_generate = ['api/modules.rst', 'api/pages.rst']
+html_extra_path = ['APIs']
 doxygen_xml = 'xml'
 
 # Add any paths that contain templates here, relative to this directory.
