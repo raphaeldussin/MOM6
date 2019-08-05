@@ -2,10 +2,6 @@ channels:
   - conda-forge
 
 dependencies:
-  - python=3.6
-  - sphinx=1.5
+  - python=3.7
+  - sphinx
   - doxygen
-  - pip
-  - pip:
-    - git+https://github.com/angus-g/sphinxcontrib-autodoc_doxygen.git#egg=sphinxcontrib-autodoc_doxygen
-    - git+https://github.com/angus-g/sphinx-fortran.git#egg=sphinx-fortran
