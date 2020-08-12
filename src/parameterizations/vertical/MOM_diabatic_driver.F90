@@ -67,7 +67,7 @@ use MOM_unit_scaling,        only : unit_scale_type
 use MOM_variables,           only : thermo_var_ptrs, vertvisc_type, accel_diag_ptrs
 use MOM_variables,           only : cont_diag_ptrs, MOM_thermovar_chksum, p3d
 use MOM_verticalGrid,        only : verticalGrid_type, get_thickness_units
-use MOM_wave_speed,          only : wave_speeds
+use MOM_wave_speed,          only : wave_speeds, wave_speed, wave_speed_CS, wave_speed_init
 use MOM_wave_interface,      only : wave_parameters_CS
 
 
@@ -232,6 +232,8 @@ type, public:: diabatic_CS; private
   type(KPP_CS),                 pointer :: KPP_CSp               => NULL() !< Control structure for a child module
   type(CVMix_conv_cs),          pointer :: CVMix_conv_csp        => NULL() !< Control structure for a child module
   type(diapyc_energy_req_CS),   pointer :: diapyc_en_rec_CSp     => NULL() !< Control structure for a child module
+  ! RD
+  type(wave_speed_CS),          pointer :: wave_speed_CSp        => NULL()
 
   type(group_pass_type) :: pass_hold_eb_ea !< For group halo pass
   type(group_pass_type) :: pass_Kv         !< For group halo pass
@@ -289,6 +291,7 @@ subroutine diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, &
   real, dimension(SZI_(G),SZJ_(G),G%ke) :: temp_diag             ! diagnostic array for temp
   integer :: i, j, k, m, is, ie, js, je, nz
   logical :: showCallTree ! If true, show the call tree
+
 
   if (G%ke == 1) return
 
@@ -355,6 +358,10 @@ subroutine diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, &
   endif ! associated(tv%T) .AND. associated(tv%frazil)
   if (CS%debugConservation) call MOM_state_stats('1st make_frazil', u, v, h, tv%T, tv%S, G, GV, US)
 
+  ! RD: compute outside of int waves
+  call wave_speed_init(CS%wave_speed_CSp)
+  call wave_speeds(h, tv, G, GV, US, CS%nMode, cn_IGW, CS%wave_speed_CSp, full_halos=.true.)
+
   if (CS%use_int_tides) then
     ! This block provides an interface for the unresolved low-mode internal tide module.
     call set_int_tide_input(u, v, h, tv, fluxes, CS%int_tide_input, dt, G, GV, US, &
@@ -363,7 +370,12 @@ subroutine diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, &
     if (CS%uniform_test_cg > 0.0) then
       do m=1,CS%nMode ; cn_IGW(:,:,m) = CS%uniform_test_cg ; enddo
     else
-      call wave_speeds(h, tv, G, GV, US, CS%nMode, cn_IGW, full_halos=.true.)
+      !call wave_speeds(h, tv, G, GV, US, CS%nMode, cn_IGW, full_halos=.true.)
+      ! RD testing
+      call wave_speed_init(CS%wave_speed_CSp)
+      !call wave_speed(h, tv, G, GV, US, cn_IGW(:,:,1), CS%wave_speed_CSp) ! not stable in tridiag solver
+      !call wave_speed(h, tv, G, GV, US, cn_IGW(:,:,1), CS%wave_speed_CSp, full_halos=.true.) ! same
+      call wave_speeds(h, tv, G, GV, US, CS%nMode, cn_IGW, CS%wave_speed_CSp, full_halos=.true.)
     endif
 
     call propagate_int_tide(h, tv, cn_IGW, CS%int_tide_input%TKE_itidal_input, CS%int_tide_input%tideamp, &
@@ -3264,7 +3276,8 @@ subroutine diabatic_driver_init(Time, G, GV, US, param_file, useALEalgorithm, di
                  "If true, use the code that advances a separate set of "//&
                  "equations for the internal tide energy density.", default=.false.)
   CS%nMode = 1
-  if (CS%use_int_tides) then
+  if (.TRUE.) then
+  !if (CS%use_int_tides) then
     call get_param(param_file, mdl, "INTERNAL_TIDE_MODES", CS%nMode, &
                  "The number of distinct internal tide modes "//&
                  "that will be calculated.", default=1, do_not_log=.true.)
