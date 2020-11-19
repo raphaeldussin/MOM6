@@ -358,6 +358,10 @@ subroutine diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, &
   endif ! associated(tv%T) .AND. associated(tv%frazil)
   if (CS%debugConservation) call MOM_state_stats('1st make_frazil', u, v, h, tv%T, tv%S, G, GV, US)
 
+  ! RD: compute outside of int waves
+  call wave_speed_init(CS%wave_speed_CSp)
+  call wave_speeds(h, tv, G, GV, US, CS%nMode, cn_IGW, CS%wave_speed_CSp, full_halos=.true.)
+
   if (CS%use_int_tides) then
     ! This block provides an interface for the unresolved low-mode internal tide module.
     call set_int_tide_input(u, v, h, tv, fluxes, CS%int_tide_input, dt, G, GV, US, &
@@ -366,7 +370,12 @@ subroutine diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, &
     if (CS%uniform_test_cg > 0.0) then
       do m=1,CS%nMode ; cn_IGW(:,:,m) = CS%uniform_test_cg ; enddo
     else
-      call wave_speeds(h, tv, G, GV, US, CS%nMode, cn_IGW, full_halos=.true.)
+      !call wave_speeds(h, tv, G, GV, US, CS%nMode, cn_IGW, full_halos=.true.)
+      ! RD testing
+      call wave_speed_init(CS%wave_speed_CSp)
+      !call wave_speed(h, tv, G, GV, US, cn_IGW(:,:,1), CS%wave_speed_CSp) ! not stable in tridiag solver
+      !call wave_speed(h, tv, G, GV, US, cn_IGW(:,:,1), CS%wave_speed_CSp, full_halos=.true.) ! same
+      call wave_speeds(h, tv, G, GV, US, CS%nMode, cn_IGW, CS%wave_speed_CSp, full_halos=.true.)
     endif
 
     call propagate_int_tide(h, tv, cn_IGW, CS%int_tide_input%TKE_itidal_input, CS%int_tide_input%tideamp, &
