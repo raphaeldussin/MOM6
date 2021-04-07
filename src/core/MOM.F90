@@ -227,6 +227,8 @@ type, public :: MOM_control_struct ; private
   logical :: offline_tracer_mode = .false.
                     !< If true, step_offline() is called instead of step_MOM().
                     !! This is intended for running MOM6 in offline tracer mode
+  logical :: robust_diag = .false.
+                    !< If true, only run dynamics.
 
   type(time_type), pointer :: Time   !< pointer to the ocean clock
   real    :: dt                      !< (baroclinic) dynamics time step [T ~> s]
@@ -716,8 +718,8 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
       endif
 
       ! Apply diabatic forcing, do mixing, and regrid.
-      call step_MOM_thermo(CS, G, GV, US, u, v, h, CS%tv, fluxes, dtdia, &
-                           end_time_thermo, .true., Waves=Waves)
+      if (.not.CS%robust_diag) call step_MOM_thermo(CS, G, GV, US, u, v, h, CS%tv, fluxes, dtdia, &
+                                                 end_time_thermo, .true., Waves=Waves)
       CS%time_in_thermo_cycle = CS%time_in_thermo_cycle + dtdia
 
       ! The diabatic processes are now ahead of the dynamics by dtdia.
@@ -788,7 +790,11 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
       endif
 
       if (do_advection) then ! Do advective transport and lateral tracer mixing.
-        call step_MOM_tracer_dyn(CS, G, GV, US, h, Time_local)
+        if (CS%robust_diag) then
+          CS%t_dyn_rel_adv = 0.0 ! fake a successful tracer_dyn step
+        else
+          call step_MOM_tracer_dyn(CS, G, GV, US, h, Time_local)
+        endif
         if (CS%diabatic_first .and. abs(CS%t_dyn_rel_thermo) > 1e-6*dt) call MOM_error(FATAL, &
                 "step_MOM: Mismatch between the dynamics and diabatic times "//&
                 "with DIABATIC_FIRST.")
@@ -817,8 +823,8 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
         CS%Time = CS%Time - real_to_time(0.5*US%T_to_s*(dtdia-dt))
 
       ! Apply diabatic forcing, do mixing, and regrid.
-      call step_MOM_thermo(CS, G, GV, US, u, v, h, CS%tv, fluxes, dtdia, &
-                           Time_local, .false., Waves=Waves)
+      if (.not.CS%robust_diag) call step_MOM_thermo(CS, G, GV, US, u, v, h, CS%tv, fluxes, dtdia, &
+                                                 Time_local, .false., Waves=Waves)
       CS%time_in_thermo_cycle = CS%time_in_thermo_cycle + dtdia
 
       if ((CS%t_dyn_rel_thermo==0.0) .and. .not.do_dyn) then
@@ -1816,6 +1822,10 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
                  "This is intended only to be used in offline tracer mode "//&
                  "and is by default false in that case.", &
                  do_not_log = .true., default=.true. )
+  call get_param(param_file, "MOM", "ROBUST_DIAG", CS%robust_diag, &
+                 "If True, run only the dynamics and bypass thermodynamics "//&
+                 "and tracer advection.", &
+                 do_not_log = .false., default=.false. )
   if (present(offline_tracer_mode)) then ! Only read this parameter in enabled modes
     call get_param(param_file, "MOM", "OFFLINE_TRACER_MODE", CS%offline_tracer_mode, &
                  "If true, barotropic and baroclinic dynamics, thermodynamics "//&
