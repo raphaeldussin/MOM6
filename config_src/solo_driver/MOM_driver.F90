@@ -179,6 +179,7 @@ program MOM_main
                                  ! fields necessary to integrate only the tracer advection
                                  ! and diffusion equation are read in from files stored from
                                  ! a previous integration of the prognostic model
+  logical :: robust_diag         ! If true, only runs dynamics and skip thermo and tracer advection
 
   type(MOM_control_struct),  pointer :: MOM_CSp => NULL()
   !> A pointer to the tracer flow control structure.
@@ -396,7 +397,10 @@ program MOM_main
                  "If true, apply diabatic and thermodynamic processes, "//&
                  "including buoyancy forcing and mass gain or loss, "//&
                  "before stepping the dynamics forward.", default=.false.)
-
+  call get_param(param_file, mod_name, "ROBUST_DIAG", robust_diag, &
+                 "If True, run only the dynamics and bypass thermodynamics "//&
+                 "and tracer advection.", &
+                 default=.false.)
 
   if (Time >= Time_end) call MOM_error(FATAL, &
     "MOM_driver: The run has been started at or after the end time of the run.")
@@ -566,7 +570,7 @@ program MOM_main
 
     call mech_forcing_diags(forces, dt_forcing, grid, Time, diag, surface_forcing_CSp%handles)
 
-    if (.not. offline_tracer_mode) then
+    if (.not.offline_tracer_mode .and. .not.robust_diag) then
       if (fluxes%fluxes_used) then
         call forcing_diagnostics(fluxes, sfc_state, grid, US, Time, &
                                  diag, surface_forcing_CSp%handles)
@@ -609,7 +613,7 @@ program MOM_main
       call MOM_error(WARNING, "End of MOM_main reached with inconsistent "//&
          "dynamics and advective times.  Additional restart fields "//&
          "that have not been coded yet would be required for reproducibility.")
-    if (.not.fluxes%fluxes_used .and. .not.offline_tracer_mode) call MOM_error(FATAL, &
+    if (.not.fluxes%fluxes_used .and. .not.offline_tracer_mode .and. .not.robust_diag) call MOM_error(FATAL, &
          "End of MOM_main reached with unused buoyancy fluxes. "//&
          "For conservation, the ocean restart files can only be "//&
          "created after the buoyancy forcing is applied.")
