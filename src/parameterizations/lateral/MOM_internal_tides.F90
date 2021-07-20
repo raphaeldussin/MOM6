@@ -1628,11 +1628,12 @@ subroutine reflect(En, NAngle, CS, G, LB)
 
   real    :: TwoPi                         ! 2*pi = 6.2831853... [nondim]
   real    :: Angle_size                    ! size of beam wedge [rad]
-  real    :: angle_wall                    ! angle of coast/ridge/shelf wrt equator [rad]
+  integer :: angle_wall                    ! angle of coast/ridge/shelf wrt equator [rad]
   real, dimension(1:NAngle) :: angle_i     ! angle of incident ray wrt equator [rad]
-  real    :: angle_r                       ! angle of reflected ray wrt equator [rad]
+  integer :: angle_r                       ! angle of reflected ray wrt equator [rad]
   real, dimension(1:Nangle) :: En_reflected
-  integer :: i, j, a, a_r, na
+  integer :: i, j, a, a_r, na, i_global, a0, aw0
+  integer :: Nangle_d2 !, Nangle_d4
   !integer :: isd, ied, jsd, jed   ! start and end local indices on data domain
   !                                ! (values include halos)
   integer :: isc, iec, jsc, jec   ! start and end local indices on PE
@@ -1646,6 +1647,8 @@ subroutine reflect(En, NAngle, CS, G, LB)
 
   TwoPi = 8.0*atan(1.0)
   Angle_size = TwoPi / (real(NAngle))
+  Nangle_d2 = (Nangle / 2)
+  !Nangle_d4 = (Nangle / 4)
 
   do a=1,NAngle
     ! These are the angles at the cell centers
@@ -1659,7 +1662,9 @@ subroutine reflect(En, NAngle, CS, G, LB)
   ridge(:,:) = .false.
 
   do j=jsh,jeh ; do i=ish,ieh
-    angle_c(i,j)   = CS%refl_angle(i,j)
+    if (CS%refl_angle(i,j) /= CS%nullangle) then
+      angle_c(i,j)   = mod(CS%refl_angle(i,j) + TwoPi, TwoPi)
+    endif
     part_refl(i,j) = CS%refl_pref(i,j)
     ridge(i,j)     = CS%refl_dbl(i,j)
   enddo ; enddo
@@ -1669,39 +1674,53 @@ subroutine reflect(En, NAngle, CS, G, LB)
     ! redistribute energy in angular space if ray will hit boundary
     ! i.e., if energy is in a reflecting cell
     if (angle_c(i,j) /= CS%nullangle) then
+      ! angle_c is given in rad, convert to the discretize angle
+      angle_wall = nint(angle_c(i,j)/Angle_size) + 1
+      !angle_normal = mod(angle_wall - (Nangle/4) + Nangle, Nangle)
       do a=1,NAngle ; if (En(i,j,a) > 0.0) then
-        if (sin(angle_i(a) - angle_c(i,j)) >= 0.0) then
-          ! if ray is incident, keep specified boundary angle
-          angle_wall = angle_c(i,j)
-        elseif (ridge(i,j)) then
-         ! if ray is not incident but in ridge cell, use complementary angle
-         angle_wall = angle_c(i,j) + 0.5*TwoPi
-          if (angle_wall > TwoPi) then
-            angle_wall = angle_wall - TwoPi*floor(abs(angle_wall)/TwoPi)
-          elseif (angle_wall < 0.0) then
-            angle_wall = angle_wall + TwoPi*ceiling(abs(angle_wall)/TwoPi)
+
+
+        a0 = a - 1 ! angle 0 - 23
+        aw0 = angle_wall - 1
+
+        !i_global = i + G%idg_offset
+        !if (i_global == 50) then
+        !print *, "working on angle", a, "at j =", j
+        !endif
+
+        if (ridge(i,j)) then
+          print *, "Using ridge for", i, j
+          ! if ray is not incident but in ridge cell, use complementary angle
+          if (Nangle_d2 .lt. mod(a0 - aw0 + Nangle, Nangle) .lt. Nangle) then
+            aw0 = mod(aw0 + Nangle_d2 + Nangle, Nangle)
           endif
-        else
-          ! if ray is not incident and not in a ridge cell, keep specified angle
-          angle_wall = angle_c(i,j)
         endif
 
         ! do reflection
-        if (sin(angle_i(a) - angle_wall) >= 0.0) then
-          angle_r = 2.0*angle_wall - angle_i(a)
-          if (angle_r > TwoPi) then
-            angle_r = angle_r - TwoPi*floor(abs(angle_r)/TwoPi)
-          elseif (angle_r < 0.0) then
-            angle_r = angle_r + TwoPi*ceiling(abs(angle_r)/TwoPi)
-          endif
-          a_r = nint(angle_r/Angle_size) + 1
-          do while (a_r > Nangle) ; a_r = a_r - Nangle ; enddo
-          if (a /= a_r) then
-            En_reflected(a_r) = part_refl(i,j)*En(i,j,a)
-            En(i,j,a)   = (1.0-part_refl(i,j))*En(i,j,a)
-          endif
+        if (0 .lt. mod(a0 - aw0 + Nangle, Nangle) .lt. Nangle_d2) then
+          a_r = 2 * aw0 - a0
+          a_r = mod(a_r + Nangle, Nangle)
+          a_r = a_r + 1
         endif
+        !if (i_global == 50) then
+        !print *, "reflect to angle", a_r, "at j =", j
+        !endif
+
+        !if (j .lt. 10) then 
+        !  a_r = 7
+        !else
+        !  a_r = 19
+        !endif
+     
+        !print *, 'reflection at i, j = (', i, j, ') from angle', a, 'to angle', a_r
+
+        if (a /= a_r) then
+          En_reflected(a_r) = part_refl(i,j)*En(i,j,a)
+          En(i,j,a)   = (1.0-part_refl(i,j))*En(i,j,a)
+        endif
+
       endif ; enddo ! a-loop
+
       do a=1,NAngle
         En(i,j,a) = En(i,j,a) + En_reflected(a)
         En_reflected(a) = 0.0
