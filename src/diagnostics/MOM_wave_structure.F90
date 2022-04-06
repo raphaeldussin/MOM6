@@ -524,8 +524,8 @@ subroutine wave_structure(h, tv, G, GV, US, cn, ModeNum, freq, CS, En, full_halo
             ! Back-calculate amplitude from energy equation
             if (present(En) .and. (freq**2*Kmag2 > 0.0)) then
               ! Units here are [R Z ~> kg m-2]
-              KE_term = 0.25*GV%Rho0*( ((freq**2 + f2) / (freq**2*Kmag2))*int_dwdz2 + int_w2 )
-              PE_term = 0.25*GV%Rho0*( int_N2w2 / freq**2 )
+              KE_term = 0.5*GV%Rho0*( ((freq**2 + f2) / (freq**2*Kmag2))*int_dwdz2 + int_w2 )
+              PE_term = 0.5*GV%Rho0*( int_N2w2 / freq**2 )
               if (En(i,j) >= 0.0) then
                 W0 = sqrt( En(i,j) / (KE_term + PE_term) )
               else
@@ -537,7 +537,7 @@ subroutine wave_structure(h, tv, G, GV, US, cn, ModeNum, freq, CS, En, full_halo
               W_profile(:)    = W0*w_strct(:)
               ! dWdz_profile(:) = W0*u_strct(:)
               ! Calculate average magnitude of actual horizontal velocity over a period
-              Uavg_profile(:) = abs(W0*u_strct(:)) * sqrt((freq**2 + f2) / (2.0*freq**2*Kmag2))
+              Uavg_profile(:) = abs(W0*u_strct(:)) * sqrt((freq**2 + f2) / (freq**2*Kmag2))
             else
               W_profile(:)    = 0.0
               ! dWdz_profile(:) = 0.0
