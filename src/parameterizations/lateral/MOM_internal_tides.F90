@@ -737,35 +737,35 @@ subroutine itidal_lowmode_loss(G, US, CS, Nb, Ub, En, TKE_loss_fixed, TKE_loss, 
 
     ! Update energy remaining (this is a pseudo implicit calc)
     ! (E(t+1)-E(t))/dt = -TKE_loss(E(t+1)/E(t)), which goes to zero as E(t+1) goes to zero
-    !if (En_tot > 0.0) then
-    !  do a=1,CS%nAngle
-    !    frac_per_sector = En(i,j,a,fr,m)/En_tot
-    !    TKE_loss(i,j,a,fr,m) = frac_per_sector*TKE_loss_tot           ! Wm-2
-    !    loss_rate = TKE_loss(i,j,a,fr,m) / (En(i,j,a,fr,m) + En_negl) ! [T-1 ~> s-1]
-    !    En(i,j,a,fr,m) = En(i,j,a,fr,m) / (1.0 + dt*loss_rate)
-    !  enddo
-    !else
-    !  ! no loss if no energy
-    !  TKE_loss(i,j,:,fr,m) = 0.0
-    !endif
-
-    ! Update energy remaining (this is the old explicit calc)
     if (En_tot > 0.0) then
       do a=1,CS%nAngle
         frac_per_sector = En(i,j,a,fr,m)/En_tot
-        TKE_loss(i,j,a,fr,m) = frac_per_sector*TKE_loss_tot
-        if (TKE_loss(i,j,a,fr,m)*dt <= En(i,j,a,fr,m))then
-          En(i,j,a,fr,m) = En(i,j,a,fr,m) - TKE_loss(i,j,a,fr,m)*dt
-        else
-          call MOM_error(WARNING, "itidal_lowmode_loss: energy loss greater than avalable, "// &
-                            " setting En to zero.", all_print=.true.)
-          En(i,j,a,fr,m) = 0.0
-        endif
+        TKE_loss(i,j,a,fr,m) = frac_per_sector*TKE_loss_tot           ! Wm-2
+        loss_rate = TKE_loss(i,j,a,fr,m) / (En(i,j,a,fr,m) + En_negl) ! [T-1 ~> s-1]
+        En(i,j,a,fr,m) = En(i,j,a,fr,m) / (1.0 + dt*loss_rate)
       enddo
     else
       ! no loss if no energy
       TKE_loss(i,j,:,fr,m) = 0.0
     endif
+
+    ! Update energy remaining (this is the old explicit calc)
+    !if (En_tot > 0.0) then
+    !  do a=1,CS%nAngle
+    !    frac_per_sector = En(i,j,a,fr,m)/En_tot
+    !    TKE_loss(i,j,a,fr,m) = frac_per_sector*TKE_loss_tot
+    !    if (TKE_loss(i,j,a,fr,m)*dt <= En(i,j,a,fr,m))then
+    !      En(i,j,a,fr,m) = En(i,j,a,fr,m) - TKE_loss(i,j,a,fr,m)*dt
+    !    else
+    !      call MOM_error(WARNING, "itidal_lowmode_loss: energy loss greater than avalable, "// &
+    !                        " setting En to zero.", all_print=.true.)
+    !      En(i,j,a,fr,m) = 0.0
+    !    endif
+    !  enddo
+    !else
+    !  ! no loss if no energy
+    !  TKE_loss(i,j,:,fr,m) = 0.0
+    !endif
 
   enddo ; enddo ; enddo ; enddo
 
