@@ -718,8 +718,8 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
       endif
 
       ! Apply diabatic forcing, do mixing, and regrid.
-      if (.not.CS%robust_diag) call step_MOM_thermo(CS, G, GV, US, u, v, h, CS%tv, fluxes, dtdia, &
-                                                 end_time_thermo, .true., Waves=Waves)
+      call step_MOM_thermo(CS, G, GV, US, u, v, h, CS%tv, fluxes, dtdia, &
+                           end_time_thermo, .true., Waves=Waves)
       CS%time_in_thermo_cycle = CS%time_in_thermo_cycle + dtdia
 
       ! The diabatic processes are now ahead of the dynamics by dtdia.
@@ -790,11 +790,7 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
       endif
 
       if (do_advection) then ! Do advective transport and lateral tracer mixing.
-        if (CS%robust_diag) then
-          CS%t_dyn_rel_adv = 0.0 ! fake a successful tracer_dyn step
-        else
-          call step_MOM_tracer_dyn(CS, G, GV, US, h, Time_local)
-        endif
+        call step_MOM_tracer_dyn(CS, G, GV, US, h, Time_local)
         if (CS%diabatic_first .and. abs(CS%t_dyn_rel_thermo) > 1e-6*dt) call MOM_error(FATAL, &
                 "step_MOM: Mismatch between the dynamics and diabatic times "//&
                 "with DIABATIC_FIRST.")
@@ -823,8 +819,8 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
         CS%Time = CS%Time - real_to_time(0.5*US%T_to_s*(dtdia-dt))
 
       ! Apply diabatic forcing, do mixing, and regrid.
-      if (.not.CS%robust_diag) call step_MOM_thermo(CS, G, GV, US, u, v, h, CS%tv, fluxes, dtdia, &
-                                                 Time_local, .false., Waves=Waves)
+      call step_MOM_thermo(CS, G, GV, US, u, v, h, CS%tv, fluxes, dtdia, &
+                           Time_local, .false., Waves=Waves)
       CS%time_in_thermo_cycle = CS%time_in_thermo_cycle + dtdia
 
       if ((CS%t_dyn_rel_thermo==0.0) .and. .not.do_dyn) then
@@ -998,6 +994,8 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_thermo, &
     v => NULL(), & ! v : meridional velocity component [L T-1 ~> m s-1]
     h => NULL()    ! h : layer thickness [H ~> m or kg m-2]
 
+  real ALLOCABLE_, dimension(NIMEM_,NJMEM_,NKMEM_) :: h_old
+
   logical :: calc_dtbt  ! Indicates whether the dynamically adjusted
                         ! barotropic time step needs to be updated.
   logical :: showCallTree
@@ -1014,6 +1012,7 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_thermo, &
   showCallTree = callTree_showQuery()
 
   call cpu_clock_begin(id_clock_dynamics)
+
 
   if ((CS%t_dyn_rel_adv == 0.0) .and. CS%thickness_diffuse .and. CS%thickness_diffuse_first) then
 
@@ -1087,6 +1086,7 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_thermo, &
 
   endif ! -------------------------------------------------- end SPLIT
 
+
   if (CS%thickness_diffuse .and. .not.CS%thickness_diffuse_first) then
     call cpu_clock_begin(id_clock_thick_diff)
 
@@ -1121,6 +1121,7 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_thermo, &
                     CS%uhtr, CS%vhtr, G%HI, haloshift=0, scale=GV%H_to_m*US%L_to_m**2)
     endif
   endif
+
 
   ! Whenever thickness changes let the diag manager know, target grids
   ! for vertical remapping may need to be regenerated.
@@ -1184,10 +1185,13 @@ subroutine step_MOM_tracer_dyn(CS, G, GV, US, h, Time_local)
   call cpu_clock_begin(id_clock_thermo) ; call cpu_clock_begin(id_clock_tracer)
   call enable_averages(CS%t_dyn_rel_adv, Time_local, CS%diag)
 
-  call advect_tracer(h, CS%uhtr, CS%vhtr, CS%OBC, CS%t_dyn_rel_adv, G, GV, US, &
-                     CS%tracer_adv_CSp, CS%tracer_Reg)
-  call tracer_hordiff(h, CS%t_dyn_rel_adv, CS%MEKE, CS%VarMix, G, GV, US, &
-                      CS%tracer_diff_CSp, CS%tracer_Reg, CS%tv)
+  if ( .not. CS%robust_diag ) then
+    call advect_tracer(h, CS%uhtr, CS%vhtr, CS%OBC, CS%t_dyn_rel_adv, G, GV, US, &
+                       CS%tracer_adv_CSp, CS%tracer_Reg)
+    call tracer_hordiff(h, CS%t_dyn_rel_adv, CS%MEKE, CS%VarMix, G, GV, US, &
+                        CS%tracer_diff_CSp, CS%tracer_Reg, CS%tv)
+  endif
+
   if (showCallTree) call callTree_waypoint("finished tracer advection/diffusion (step_MOM)")
   call update_segment_tracer_reservoirs(G, GV, CS%uhtr, CS%vhtr, h, CS%OBC, &
                      CS%t_dyn_rel_adv, CS%tracer_Reg)
