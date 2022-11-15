@@ -141,6 +141,7 @@ type, public :: int_tide_CS ; private
              id_itidal_loss_mode, &
              id_allprocesses_loss_mode, &
              id_Uprof_mode, &
+             id_Wprof_mode, &
              id_Ub_mode, &
              id_cp_mode
   ! Diag handles considering: all modes, freqs, and angles
@@ -189,7 +190,7 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
     tot_En_mode, & ! energy summed over angles only [R Z3 T-2 ~> J m-2]
     Ub, &          ! near-bottom horizontal velocity of wave (modal) [L T-1 ~> m s-1]
     Umax           ! Maximum horizontal velocity of wave (modal) [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJ_(G), SZK_(G),CS%nFreq,CS%nMode) :: Uprof
+  real, dimension(SZI_(G),SZJ_(G), SZK_(G)+1,CS%nFreq,CS%nMode) :: Uprof, Wprof
   real, dimension(SZI_(G),SZJ_(G)) :: &
     tot_En, &      ! energy summed over angles, modes, frequencies [R Z3 T-2 ~> J m-2]
     tot_leak_loss, tot_quad_loss, tot_itidal_loss, tot_Froude_loss, tot_residual_loss, tot_allprocesses_loss, &
@@ -227,6 +228,7 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
   drag_scale(:,:) = 0.
   Ub(:,:,:,:) = 0.
   Uprof(:,:,:,:,:) = 0.
+  Wprof(:,:,:,:,:) = 0.
 
   ! Set the wave speeds for the modes, using cg(n) ~ cg(1)/n.**********************
   ! This is wrong, of course, but it works reasonably in some cases.
@@ -422,10 +424,17 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
       do j=jsd,jed ; do i=isd,ied
         id_g = i + G%idg_offset ; jd_g = j + G%jdg_offset ! for debugging
         nzm = CS%wave_struct%num_intfaces(i,j)
+        ! debugging
+        !if (CS%wave_struct%Uavg_profile(i,j,nzm) < -9998.) then
+        !   write(mesg,*) 'bottom tidal velocity using out of bounds value at ig=', id_g, ', jg=', jd_g, &
+        !              'nzm=', nzm
+        !   call MOM_error(FATAL, "propagate_int_tide: "//trim(mesg), all_print=.true.)
+        !endif
         Ub(i,j,fr,m) = CS%wave_struct%Uavg_profile(i,j,nzm)
         Umax(i,j,fr,m) = maxval(CS%wave_struct%Uavg_profile(i,j,1:nzm))
         do k=1,nzm
           Uprof(i,j,k,fr,m) = CS%wave_struct%Uavg_profile(i,j,k)
+          Wprof(i,j,k,fr,m) = CS%wave_struct%W_profile(i,j,k)
         enddo
       enddo ; enddo ! i-loop, j-loop
     enddo ; enddo ! fr-loop, m-loop
@@ -638,6 +647,10 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
 
     do m=1,CS%NMode ; do fr=1,CS%Nfreq ; if (CS%id_Uprof_mode(fr,m) > 0) then
       call post_data(CS%id_Uprof_mode(fr,m), Uprof(:,:,:,fr,m), CS%diag)
+    endif ; enddo ; enddo
+
+    do m=1,CS%NMode ; do fr=1,CS%Nfreq ; if (CS%id_Wprof_mode(fr,m) > 0) then
+      call post_data(CS%id_Wprof_mode(fr,m), Wprof(:,:,:,fr,m), CS%diag)
     endif ; enddo ; enddo
 
     ! Output 2-D horizontal phase velocity for each freq and mode
@@ -2609,6 +2622,7 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   allocate(CS%id_itidal_loss_ang_mode(CS%nFreq,CS%nMode), source=-1)
   allocate(CS%id_Ub_mode(CS%nFreq,CS%nMode), source=-1)
   allocate(CS%id_Uprof_mode(CS%nFreq,CS%nMode), source=-1)
+  allocate(CS%id_Wprof_mode(CS%nFreq,CS%nMode), source=-1)
   allocate(CS%id_cp_mode(CS%nFreq,CS%nMode), source=-1)
 
   allocate(angles(CS%NAngle), source=0.0)
@@ -2667,7 +2681,14 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
     write(var_name, '("Itide_Uprof_freq",i1,"_mode",i1)') fr, m
     write(var_descript, '("horizonal velocity profile for frequency ",i1," mode ",i1)') fr, m
     CS%id_Uprof_mode(fr,m) = register_diag_field('ocean_model', var_name, &
-                 diag%axesTL, Time, var_descript, 'm s-1', conversion=US%L_T_to_m_s)
+                 diag%axesTi, Time, var_descript, 'm s-1', conversion=US%L_T_to_m_s)
+    call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
+
+    ! Register 2-D period-averaged vertical velocity profile for each freq and mode
+    write(var_name, '("Itide_Wprof_freq",i1,"_mode",i1)') fr, m
+    write(var_descript, '("vertical velocity profile for frequency ",i1," mode ",i1)') fr, m
+    CS%id_Wprof_mode(fr,m) = register_diag_field('ocean_model', var_name, &
+                 diag%axesTi, Time, var_descript, 'm s-1', conversion=US%L_T_to_m_s)
     call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
 
     ! Register 2-D horizonal phase velocity for each freq and mode
