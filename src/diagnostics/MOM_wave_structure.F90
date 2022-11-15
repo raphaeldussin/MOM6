@@ -21,7 +21,7 @@ use MOM_grid,          only : ocean_grid_type
 use MOM_unit_scaling,  only : unit_scale_type
 use MOM_variables,     only : thermo_var_ptrs
 use MOM_verticalGrid,  only : verticalGrid_type
-use regrid_solvers, only : solve_diag_dominant_tridiag
+use regrid_solvers, only : solve_diag_dominant_tridiag, solve_tridiagonal_system
 
 implicit none ; private
 
@@ -188,7 +188,7 @@ subroutine wave_structure(h, tv, G, GV, US, cn, ModeNum, freq, CS, En, full_halo
                                          !< interface (excluding surface and bottom) [Z-1 ~> m-1]
   real, dimension(SZK_(GV)-1) :: c_diag  !< lower diagonal of tridiagonal matrix; one value for each
                                          !< interface (excluding surface and bottom) [Z-1 ~> m-1]
-  real, dimension(SZK_(GV)-1) :: b_dom   !< Matrix center diagonal offset from a_diag + c_diag; one value
+  real, dimension(SZK_(GV)-1) :: b_dom, b_diag   !< Matrix center diagonal offset from a_diag + c_diag; one value
                                          !< for each interface (excluding surface and bottom) [Z-1 ~> m-1]
   real, dimension(SZK_(GV)-1) :: e_guess !< guess at eigen vector with unit amplitude (for TDMA) [nondim]
   real, dimension(SZK_(GV)-1) :: e_itt   !< improved guess at eigen vector (from TDMA) [nondim]
@@ -426,15 +426,22 @@ subroutine wave_structure(h, tv, G, GV, US, cn, ModeNum, freq, CS, En, full_halo
             ! init the values in matrix: since number of layers is variable, values need to be reset
             lam_z(:) = 0.0
             a_diag(:) = 0.0
+            b_diag(:) = 0.0
             b_dom(:) = 0.0
             c_diag(:) = 0.0
             e_guess(:) = 0.0
             e_itt(:) = 0.0
+            u_strct(:) = 0.0
             w_strct(:) = 0.0
+            u_strct2(:) = 0.0
+            w_strct2(:) = 0.0
+            Uavg_profile(:) = 0.0
+            W_profile(:) = 0.0
             do K=3,kc-1
               row = K-1 ! indexing for TD matrix rows
               lam_z(row) = lam*gprime(K)
               a_diag(row) = gprime(K)*(-Igu(K))
+              b_diag(row) = gprime(K)*(Igu(K)+Igl(K)) - lam_z(row)
               b_dom(row) = 2.0*gprime(K)*(Igu(K)+Igl(K)) - lam_z(row)
               c_diag(row) = gprime(K)*(-Igl(K))
             enddo
@@ -447,14 +454,22 @@ subroutine wave_structure(h, tv, G, GV, US, cn, ModeNum, freq, CS, En, full_halo
             K=2 ; row = K-1 ;
             lam_z(row) = lam*gprime(K)
             a_diag(row) = 0.0
+            b_diag(row) = gprime(K)*(Igu(K)+Igl(K)) - lam_z(row)
             b_dom(row) = gprime(K)*(Igu(K)+2.0*Igl(K)) - lam_z(row)
             c_diag(row) = gprime(K)*(-Igl(K))
             ! Populate bottom row of tridiagonal matrix
             K=kc ; row = K-1
             lam_z(row) = lam*gprime(K)
             a_diag(row) = gprime(K)*(-Igu(K))
+            b_diag(row) = gprime(K)*(Igu(K)+Igl(K)) - lam_z(row)
             b_dom(row) = gprime(K)*(2.0*Igu(K) + Igl(K)) - lam_z(row)
             c_diag(row) = 0.0
+
+            !do K=1,kc-1
+            !   if (abs(b_diag(K)) <= abs(a_diag(K)) + abs(c_diag(K))) then 
+            !       call MOM_error(FATAL, "ill-conditionned matrix")
+            !   endif
+            !enddo
 
             ! Guess a normalized vector shape to start with (excludes surface and bottom)
             emag2 = 0.0
@@ -470,10 +485,21 @@ subroutine wave_structure(h, tv, G, GV, US, cn, ModeNum, freq, CS, En, full_halo
             do itt=1,max_itt
               ! this solver becomes unstable very quickly
               ! b_diag(1:kc-1) = b_dom(1:kc-1) - (a_diag(1:kc-1) + c_diag(1:kc-1))
-              !call tridiag_solver(a_diag(1:kc-1),b_diag(1:kc-1),c_diag(1:kc-1), &
-              !                    -lam_z(1:kc-1),e_guess(1:kc-1),"TDMA_T",e_itt)
+              call tridiag_solver(a_diag(1:kc-1),b_diag(1:kc-1),c_diag(1:kc-1), &
+                                   -lam_z(1:kc-1),e_guess(1:kc-1),"Durran",e_itt)
 
-              call solve_diag_dominant_tridiag( c_diag, b_dom, a_diag, e_guess, e_itt, kc-1 )
+              !                    -lam_z(1:kc-1),e_guess(1:kc-1),"TDMA_T",e_itt)
+              !                    -lam_z(1:kc-1),e_guess(1:kc-1),"TDMA_H",e_itt)
+              !                    -lam_z(1:kc-1),e_guess(1:kc-1),"Durran",e_itt)
+
+              !call solve_diag_dominant_tridiag( c_diag(1:kc-1), -b_dom(1:kc-1), a_diag(1:kc-1), e_guess(1:kc-1), e_itt, kc-1 )
+
+              ! prototype: call solve_tridiagonal_system( Al, Ad, Au, R, X, N, answer_date )
+              !call solve_tridiagonal_system( c_diag(1:kc-1), b_diag(1:kc-1), a_diag(1:kc-1), e_guess(1:kc-1), e_itt(1:kc-1), kc-1, 20200101 )
+
+              !do K=1,kc-1 ; e_itt(K) = e_guess(K) ; enddo
+              !do K=1,kc-1 ; e_guess(K) = e_itt(K) ; enddo
+              
               ! Renormalize the guesses of the structure.-
               emag2 = 0.0
               do K=2,kc ; emag2 = emag2 + e_itt(K-1)**2 ; enddo
@@ -519,6 +545,15 @@ subroutine wave_structure(h, tv, G, GV, US, cn, ModeNum, freq, CS, En, full_halo
             u_strct(1)   = (w_strct(1)   -  w_strct(2) )/dz(1)
             u_strct(nzm) = (w_strct(nzm-1)-  w_strct(nzm))/dz(nzm-1)
 
+            !RD test
+            !do K=2,nzm-1
+            !  u_strct(K) = 0.5*((w_strct(K) - w_strct(K-1)  )/dz(k-1) + &
+            !                    (w_strct(K+1) - w_strct(K))/dz(k))
+            !enddo
+            !u_strct(1)   = (w_strct(2)   -  w_strct(1) )/dz(1)
+            !u_strct(nzm) = (w_strct(nzm)-  w_strct(nzm-1))/dz(nzm-1)
+            
+
             ! Calculate wavenumber magnitude
             f2 = (0.25*(G%CoriolisBu(I,J) + G%CoriolisBu(max(I-1,1),max(J-1,1)) + &
                         G%CoriolisBu(I,max(J-1,1)) + G%CoriolisBu(max(I-1,1),J)))**2
@@ -551,7 +586,8 @@ subroutine wave_structure(h, tv, G, GV, US, cn, ModeNum, freq, CS, En, full_halo
               endif
               ! Calculate actual vertical velocity profile and derivative
               U_mag = W0 * sqrt((freq**2 + f2) / (2.0*freq**2*Kmag2))
-              do K=1,nzm
+              do K=1,nzm ! RD check bounds
+              !do K=1,nz+1 ! RD check bounds
                 W_profile(K) = W0*w_strct(K)
                 ! dWdz_profile(K) = W0*u_strct(K)
                 ! Calculate average magnitude of actual horizontal velocity over a period
@@ -566,7 +602,9 @@ subroutine wave_structure(h, tv, G, GV, US, cn, ModeNum, freq, CS, En, full_halo
             endif
 
             ! Store values in control structure
-            do K=1,nzm
+            !do K=1,nzm
+            ! store for all levels including non-existent to zero
+            do K=1,nz+1
               CS%w_strct(i,j,K)      = w_strct(K)
               CS%u_strct(i,j,K)      = u_strct(K)
               CS%W_profile(i,j,K)    = W_profile(K)
@@ -577,7 +615,8 @@ subroutine wave_structure(h, tv, G, GV, US, cn, ModeNum, freq, CS, En, full_halo
             CS%num_intfaces(i,j) = nzm
           else
             ! If not enough layers, default to zero
-            nzm = kc+1
+            !nzm = kc+1
+            nzm = nz+1
             do K=1,nzm
               CS%w_strct(i,j,K)      = 0.0
               CS%u_strct(i,j,K)      = 0.0
@@ -735,6 +774,26 @@ subroutine tridiag_solver(a, b, c, h, y, method, x)
     enddo
     !print *, 'yprime=',y_prime(1:nrow)
     !print *, 'x=',x(1:nrow)
+  elseif (method == "Durran") then
+
+    do k=1,nrow
+      c_prime(k) = 0.0
+      x(k) = y(k)
+    enddo
+    c_prime(1) = -c(1)/b(1)
+    x(1) = y(1)/b(1)
+
+    ! Forward sweep
+    do k=2,nrow
+      c_prime(k) = -c(k) / (b(k) + a(k)*c_prime(k-1))
+      x(k) = (x(k) - a(k)*x(k-1) ) / (b(k) + a(k)*c_prime(k-1))
+    enddo
+
+    ! Backward sweep
+    do k=nrow-1,1,-1
+      x(k) = x(k) + c_prime(k)*x(k+1)
+    enddo
+
   endif
 
   deallocate(c_prime,y_prime,q,alpha)
