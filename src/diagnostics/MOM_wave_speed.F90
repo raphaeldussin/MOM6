@@ -12,6 +12,7 @@ use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : thermo_var_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
 use MOM_EOS, only : calculate_density_derivs
+use MOM_wave_structure, only : wave_structure_CS
 
 implicit none ; private
 
@@ -651,7 +652,7 @@ subroutine tdma6(n, a, c, lam, y)
 end subroutine tdma6
 
 !> Calculates the wave speeds for the first few barolinic modes.
-subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
+subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halos)
   type(ocean_grid_type),                    intent(in)  :: G  !< Ocean grid structure
   type(verticalGrid_type),                  intent(in)  :: GV !< Vertical grid structure
   type(unit_scale_type),                    intent(in)  :: US !< A dimensional unit scaling type
@@ -660,6 +661,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
   integer,                                  intent(in)  :: nmodes !< Number of modes
   real, dimension(G%isd:G%ied,G%jsd:G%jed,nmodes), intent(out) :: cn !< Waves speeds [L T-1 ~> m s-1]
   type(wave_speed_CS),                      intent(in)  :: CS !< Wave speed control struct
+  type(wave_structure_CS),                  intent(inout)  :: wavestructCS !< Wave structure control struct
   logical,             optional,            intent(in)  :: full_halos !< If true, do the calculation
                                                               !! over the entire data domain.
 
@@ -684,7 +686,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
     Hc, &         ! A column of layer thicknesses after convective instabilities are removed [Z ~> m]
     Tc, &         ! A column of layer temperatures after convective instabilities are removed [C ~> degC]
     Sc, &         ! A column of layer salinities after convective instabilities are removed [S ~> ppt]
-    Rc            ! A column of layer densities after convective instabilities are removed [R ~> kg m-3]
+    Rc, &         ! A column of layer densities after convective instabilities are removed [R ~> kg m-3]
+    Hc_H          ! Hc(:) rescaled from Z to thickness units [H ~> m or kg m-2]
   real :: I_Htot  ! The inverse of the total filtered thicknesses [Z ~> m]
   real :: c2_scale ! A scaling factor for wave speeds to help control the growth of the determinant and its
                    ! derivative with lam between rows of the Thomas algorithm solver [L2 s2 T-2 m-2 ~> nondim].
@@ -749,6 +752,11 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
   integer :: kc         ! The number of layers in the column after merging
   integer :: sub, sub_it
   integer :: i, j, k, k2, itt, is, ie, js, je, nz, iint, m
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) ::  modal_structure !< Normalized model structure [nondim]
+  real :: mode_struct(SZK_(GV)) ! The mode structure [nondim], but it is also temporarily
+                         ! in units of [L2 T-2 ~> m2 s-2] after it is modified inside of tdma6.
+  real :: ms_min, ms_max ! The minimum and maximum mode structure values returned from tdma6 [L2 T-2 ~> m2 s-2]
+  real :: ms_sq          ! The sum of the square of the values returned from tdma6 [L4 T-4 ~> m4 s-4]
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
@@ -1134,10 +1142,52 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
                   ! Use Newton's method to find a new estimate of lam_n
                   dlam = - det / ddet
                   lam_n = lam_n + dlam
+
+                  ! compute mode structure
+                  mode_struct(:) = 0.
+                  mode_struct(1:kc) = 1. ! Uniform flow, first guess
+
+                  call tdma6(kc, Igu, Igl, lam_n, mode_struct)
+                  ! Note that tdma6 changes the units of mode_struct to [L2 T-2 ~> m2 s-2]
+                  ms_min = mode_struct(1)
+                  ms_max = mode_struct(1)
+                  ms_sq = mode_struct(1)**2
+                  do k = 2,kc
+                    ms_min = min(ms_min, mode_struct(k))
+                    ms_max = max(ms_max, mode_struct(k))
+                    ms_sq = ms_sq + mode_struct(k)**2
+                  enddo
+                  if (ms_min<0. .and. ms_max>0.) then ! Any zero crossings => lam is too high
+                    lam_n = 0.5 * ( lam_n - dlam )
+                    dlam = -lam_n
+                    mode_struct(1:kc) = abs(mode_struct(1:kc)) / sqrt( ms_sq )
+                  else
+                    mode_struct(1:kc) = mode_struct(1:kc) / sqrt( ms_sq )
+                  endif
+
                   if (abs(dlam) < tol_solve*lam_1)  exit
                 enddo ! itt-loop
                 ! calculate nth mode speed
                 if (lam_n > 0.0) cn(i,j,m+1) = 1.0 / sqrt(lam_n)
+
+                if (mode_struct(1)/=0.) then ! Normalize
+                  mode_struct(1:kc) = mode_struct(1:kc) / mode_struct(1)
+                else
+                  mode_struct(1:kc)=0.
+                endif
+                ! Note that remapping_core_h requires that the same units be used
+                ! for both the source and target grid thicknesses, here [H ~> m or kg m-2].
+                do k = 1,kc
+                  Hc_H(k) = GV%Z_to_H * Hc(k)
+                enddo
+                  call remapping_core_h(CS%remapping_CS, kc, Hc_H(:), mode_struct, &
+                                        nz, h(i,j,:), modal_structure(i,j,:), &
+                                        GV%H_subroundoff, GV%H_subroundoff)
+                if (m == 1) then
+                  ! testing writing of wave_struct
+                  wavestructCS%w_strct(i,j,:) = modal_structure(i,j,:)
+                endif
+
               enddo ! n-loop
             endif ! if nmodes>1 .and. kc>nmodes .and. c1>c1_thresh
           endif ! if more than 2 layers

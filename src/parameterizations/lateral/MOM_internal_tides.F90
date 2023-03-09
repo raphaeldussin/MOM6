@@ -34,7 +34,7 @@ public internal_tides_init, internal_tides_end
 public get_lowmode_loss
 
 !> This control structure has parameters for the MOM_internal_tides module
-type, public :: int_tide_CS ; private
+type, public :: int_tide_CS ; !private
   logical :: do_int_tides    !< If true, use the internal tide code.
   integer :: nFreq = 0       !< The number of internal tide frequency bands
   integer :: nMode = 1       !< The number of internal tide vertical modes
@@ -2226,7 +2226,7 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
                                 ! nominal ocean depth, or a negative value for no limit [nondim]
   real    :: period_1           ! The period of the gravest modeled mode [T ~> s]
   integer :: num_angle, num_freq, num_mode, m, fr
-  integer :: isd, ied, jsd, jed, a, id_ang, i, j
+  integer :: isd, ied, jsd, jed, a, id_ang, i, j, nz
   type(axes_grp) :: axes_ang
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
@@ -2241,6 +2241,7 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   character(len=80)  :: rough_var ! Input file variable names
 
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
+  nz = GV%ke
 
   use_int_tides = .false.
   call read_param(param_file, "INTERNAL_TIDES", use_int_tides)
@@ -2407,6 +2408,7 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   allocate(CS%tot_itidal_loss(isd:ied,jsd:jed), source=0.0)
   allocate(CS%tot_Froude_loss(isd:ied,jsd:jed), source=0.0)
   allocate(CS%tot_residual_loss(isd:ied,jsd:jed), source=0.0)
+  allocate(CS%wave_struct%w_strct(isd:ied,jsd:jed,nz), source=0.0)
 
   ! Compute the fixed part of the bottom drag loss from baroclinic modes
   call get_param(param_file, mdl, "H2_FILE", h2_file, &
