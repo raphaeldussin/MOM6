@@ -23,7 +23,7 @@ use MOM_time_manager, only  : time_type, time_type_to_real, operator(+), operato
 use MOM_unit_scaling, only  : unit_scale_type
 use MOM_variables, only     : surface, thermo_var_ptrs
 use MOM_verticalGrid, only  : verticalGrid_type
-use MOM_wave_structure, only: wave_structure_init, wave_structure, wave_structure_CS
+use MOM_wave_structure, only: wave_structure_init, wave_structures_init, wave_structure, wave_structure_CS, wave_structures_CS
 
 implicit none ; private
 
@@ -126,7 +126,7 @@ type, public :: int_tide_CS ; !private
 
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to regulate the
                         !! timing of diagnostic output.
-  type(wave_structure_CS) :: wave_struct    !< Wave structure control structure
+  type(wave_structures_CS) :: wave_struct    !< Wave structure control structure
 
   !>@{ Diag handles
   ! Diag handles relevant to all modes, frequencies, and angles
@@ -418,14 +418,18 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
   if (CS%apply_wave_drag .or. CS%apply_Froude_drag) then
     do m=1,CS%NMode ; do fr=1,CS%Nfreq
       ! Calculate modal structure for given mode and frequency
-      call wave_structure(h, tv, G, GV, US, cn(:,:,m), m, CS%frequency(fr), &
-                          CS%wave_struct, tot_En_mode(:,:,fr,m), full_halos=.true.)
+      ! RD wave structure should be known from wave_speeds
+      !call wave_structure(h, tv, G, GV, US, cn(:,:,m), m, CS%frequency(fr), &
+      !                    CS%wave_struct, tot_En_mode(:,:,fr,m), full_halos=.true.)
+
+      ! we still need to get the horizontal speed and energy of the mode
+
       ! Pick out near-bottom and max horizontal baroclinic velocity values at each point
       do j=jsd,jed ; do i=isd,ied
         id_g = i + G%idg_offset ; jd_g = j + G%jdg_offset ! for debugging
         nzm = CS%wave_struct%num_intfaces(i,j)
-        Ub(i,j,fr,m) = CS%wave_struct%Uavg_profile(i,j,nzm)
-        Umax(i,j,fr,m) = maxval(CS%wave_struct%Uavg_profile(i,j,1:nzm))
+        Ub(i,j,fr,m) = CS%wave_struct%Uavg_profile(i,j,nzm,m)
+        Umax(i,j,fr,m) = maxval(CS%wave_struct%Uavg_profile(i,j,1:nzm,m))
       enddo ; enddo ! i-loop, j-loop
     enddo ; enddo ! fr-loop, m-loop
   endif ! apply_wave or _Froude_drag (Ub or Umax needed)
@@ -2408,7 +2412,8 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   allocate(CS%tot_itidal_loss(isd:ied,jsd:jed), source=0.0)
   allocate(CS%tot_Froude_loss(isd:ied,jsd:jed), source=0.0)
   allocate(CS%tot_residual_loss(isd:ied,jsd:jed), source=0.0)
-  allocate(CS%wave_struct%w_strct(isd:ied,jsd:jed,nz), source=0.0)
+  allocate(CS%wave_struct%w_strct(isd:ied,jsd:jed,nz,num_mode), source=0.0)
+  allocate(CS%wave_struct%Uavg_profile(isd:ied,jsd:jed,nz,num_mode), source=0.0)
 
   ! Compute the fixed part of the bottom drag loss from baroclinic modes
   call get_param(param_file, mdl, "H2_FILE", h2_file, &
@@ -2659,7 +2664,7 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   enddo ; enddo
 
   ! Initialize wave_structure (not sure if this should be here - BDM)
-  call wave_structure_init(Time, G, GV, param_file, diag, CS%wave_struct)
+  call wave_structures_init(Time, G, GV, param_file, diag, CS%wave_struct)
 
 end subroutine internal_tides_init
 

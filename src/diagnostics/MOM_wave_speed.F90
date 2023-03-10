@@ -12,7 +12,7 @@ use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : thermo_var_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
 use MOM_EOS, only : calculate_density_derivs
-use MOM_wave_structure, only : wave_structure_CS
+use MOM_wave_structure, only : wave_structure_CS, wave_structures_CS
 
 implicit none ; private
 
@@ -661,7 +661,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halo
   integer,                                  intent(in)  :: nmodes !< Number of modes
   real, dimension(G%isd:G%ied,G%jsd:G%jed,nmodes), intent(out) :: cn !< Waves speeds [L T-1 ~> m s-1]
   type(wave_speed_CS),                      intent(in)  :: CS !< Wave speed control struct
-  type(wave_structure_CS),                  intent(inout)  :: wavestructCS !< Wave structure control struct
+  type(wave_structures_CS),                  intent(inout)  :: wavestructCS !< Wave structure control struct
   logical,             optional,            intent(in)  :: full_halos !< If true, do the calculation
                                                               !! over the entire data domain.
 
@@ -1183,10 +1183,9 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halo
                   call remapping_core_h(CS%remapping_CS, kc, Hc_H(:), mode_struct, &
                                         nz, h(i,j,:), modal_structure(i,j,:), &
                                         GV%H_subroundoff, GV%H_subroundoff)
-                if (m == 1) then
-                  ! testing writing of wave_struct
-                  wavestructCS%w_strct(i,j,:) = modal_structure(i,j,:)
-                endif
+
+                  ! write the wave structure
+                  wavestructCS%w_strct(i,j,:,m) = modal_structure(i,j,:)
 
               enddo ! n-loop
             endif ! if nmodes>1 .and. kc>nmodes .and. c1>c1_thresh
