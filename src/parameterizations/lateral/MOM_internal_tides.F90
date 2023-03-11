@@ -142,6 +142,8 @@ type, public :: int_tide_CS ; !private
              id_En_mode, &
              id_itidal_loss_mode, &
              id_allprocesses_loss_mode, &
+             id_Uprof_mode, &
+             id_Wprof_mode, &
              id_Ub_mode, &
              id_cp_mode
   ! Diag handles considering: all modes, frequencies, and angles
@@ -190,6 +192,7 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
     tot_En_mode, & ! energy summed over angles only [R Z3 T-2 ~> J m-2]
     Ub, &          ! near-bottom horizontal velocity of wave (modal) [L T-1 ~> m s-1]
     Umax           ! Maximum horizontal velocity of wave (modal) [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJ_(G), SZK_(G)+1,CS%nFreq,CS%nMode) :: Uprof, Wprof
   real, dimension(SZI_(G),SZJ_(G)) :: &
     tot_En, &      ! energy summed over angles, modes, frequencies [R Z3 T-2 ~> J m-2]
     tot_leak_loss, tot_quad_loss, tot_itidal_loss, tot_Froude_loss, tot_residual_loss, tot_allprocesses_loss, &
@@ -229,6 +232,8 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
   ! initialize local arrays
   drag_scale(:,:) = 0.
   Ub(:,:,:,:) = 0.
+  Uprof(:,:,:,:,:) = 0.
+  Wprof(:,:,:,:,:) = 0.
 
   ! Set the wave speeds for the modes, using cg(n) ~ cg(1)/n.**********************
   ! This is wrong, of course, but it works reasonably in some cases.
@@ -427,9 +432,61 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
       ! Pick out near-bottom and max horizontal baroclinic velocity values at each point
       do j=jsd,jed ; do i=isd,ied
         id_g = i + G%idg_offset ; jd_g = j + G%jdg_offset ! for debugging
-        nzm = CS%wave_struct%num_intfaces(i,j)
-        Ub(i,j,fr,m) = CS%wave_struct%Uavg_profile(i,j,nzm,m)
-        Umax(i,j,fr,m) = maxval(CS%wave_struct%Uavg_profile(i,j,1:nzm,m))
+        !nzm = CS%wave_struct%num_intfaces(i,j)
+        !Ub(i,j,fr,m) = CS%wave_struct%Uavg_profile(i,j,nzm,m)
+        !Umax(i,j,fr,m) = maxval(CS%wave_struct%Uavg_profile(i,j,1:nzm,m))
+
+! compute amplitude from energy
+!        ! Calculate wavenumber magnitude
+!            f2 = (0.25*(G%CoriolisBu(I,J) + G%CoriolisBu(max(I-1,1),max(J-1,1)) + &
+!                        G%CoriolisBu(I,max(J-1,1)) + G%CoriolisBu(max(I-1,1),J)))**2
+!            Kmag2 = (freq**2 - f2) / (cn(i,j)**2 + cg_subRO**2)
+!
+!            ! Calculate terms in vertically integrated energy equation
+!            int_dwdz2 = 0.0 ; int_w2 = 0.0 ; int_N2w2 = 0.0
+!            do K=1,nzm
+!              u_strct2(K) = u_strct(K)**2
+!              w_strct2(K) = w_strct(K)**2
+!            enddo
+!            ! vertical integration with Trapezoidal rule
+!            do k=1,nzm-1
+!              int_dwdz2 = int_dwdz2 + 0.5*(u_strct2(K)+u_strct2(K+1)) * dz(k)
+!              int_w2    = int_w2    + 0.5*(w_strct2(K)+w_strct2(K+1)) * dz(k)
+!              int_N2w2  = int_N2w2  + 0.5*(w_strct2(K)*N2(K)+w_strct2(K+1)*N2(K+1)) * dz(k)
+!            enddo
+!
+!            ! Back-calculate amplitude from energy equation
+!            if (present(En) .and. (freq**2*Kmag2 > 0.0)) then
+!              ! Units here are [R Z ~> kg m-2]
+!              KE_term = 0.25*GV%Rho0*( ((freq**2 + f2) / (freq**2*Kmag2))*US%L_to_Z**2*int_dwdz2 + int_w2 )
+!              PE_term = 0.25*GV%Rho0*( int_N2w2 / freq**2 )
+!              if (En(i,j) >= 0.0) then
+!                W0 = sqrt( En(i,j) / (KE_term + PE_term) )
+!              else
+!                call MOM_error(WARNING, "wave_structure: En < 0.0; setting to W0 to 0.0")
+!                print *, "En(i,j)=", En(i,j), " at ig=", ig, ", jg=", jg
+!                W0 = 0.0
+!              endif
+!              ! Calculate actual vertical velocity profile and derivative
+!              U_mag = W0 * sqrt((freq**2 + f2) / (2.0*freq**2*Kmag2))
+!              do K=1,nzm
+!                W_profile(K) = W0*w_strct(K)
+!                ! dWdz_profile(K) = W0*u_strct(K)
+!                ! Calculate average magnitude of actual horizontal velocity over a period
+!                Uavg_profile(K) = abs(U_mag * u_strct(K))
+!              enddo
+!            else
+!              do K=1,nzm
+!                W_profile(K)    = 0.0
+!                ! dWdz_profile(K) = 0.0
+!                Uavg_profile(K) = 0.0
+!              enddo
+!            endif
+
+        do k=1,nzm
+          Uprof(i,j,k,fr,m) = CS%wave_struct%Uavg_profile(i,j,k,m)
+          Wprof(i,j,k,fr,m) = CS%wave_struct%W_profile(i,j,k,m)
+        enddo
       enddo ; enddo ! i-loop, j-loop
     enddo ; enddo ! fr-loop, m-loop
   endif ! apply_wave or _Froude_drag (Ub or Umax needed)
@@ -637,6 +694,14 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
     ! Output 2-D period-averaged horizontal near-bottom mode velocity for each frequency and mode
     do m=1,CS%NMode ; do fr=1,CS%Nfreq ; if (CS%id_Ub_mode(fr,m) > 0) then
       call post_data(CS%id_Ub_mode(fr,m), Ub(:,:,fr,m), CS%diag)
+    endif ; enddo ; enddo
+
+    do m=1,CS%NMode ; do fr=1,CS%Nfreq ; if (CS%id_Uprof_mode(fr,m) > 0) then
+      call post_data(CS%id_Uprof_mode(fr,m), Uprof(:,:,:,fr,m), CS%diag)
+    endif ; enddo ; enddo
+
+    do m=1,CS%NMode ; do fr=1,CS%Nfreq ; if (CS%id_Wprof_mode(fr,m) > 0) then
+      call post_data(CS%id_Wprof_mode(fr,m), Wprof(:,:,:,fr,m), CS%diag)
     endif ; enddo ; enddo
 
     ! Output 2-D horizontal phase velocity for each frequency and mode
@@ -2412,8 +2477,8 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   allocate(CS%tot_itidal_loss(isd:ied,jsd:jed), source=0.0)
   allocate(CS%tot_Froude_loss(isd:ied,jsd:jed), source=0.0)
   allocate(CS%tot_residual_loss(isd:ied,jsd:jed), source=0.0)
-  allocate(CS%wave_struct%w_strct(isd:ied,jsd:jed,nz,num_mode), source=0.0)
-  allocate(CS%wave_struct%Uavg_profile(isd:ied,jsd:jed,nz,num_mode), source=0.0)
+  !allocate(CS%wave_struct%w_strct(isd:ied,jsd:jed,nz,num_mode), source=0.0)
+  !allocate(CS%wave_struct%Uavg_profile(isd:ied,jsd:jed,nz,num_mode), source=0.0)
 
   ! Compute the fixed part of the bottom drag loss from baroclinic modes
   call get_param(param_file, mdl, "H2_FILE", h2_file, &
@@ -2600,6 +2665,8 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   allocate(CS%id_allprocesses_loss_mode(CS%nFreq,CS%nMode), source=-1)
   allocate(CS%id_itidal_loss_ang_mode(CS%nFreq,CS%nMode), source=-1)
   allocate(CS%id_Ub_mode(CS%nFreq,CS%nMode), source=-1)
+  allocate(CS%id_Uprof_mode(CS%nFreq,CS%nMode), source=-1)
+  allocate(CS%id_Wprof_mode(CS%nFreq,CS%nMode), source=-1)
   allocate(CS%id_cp_mode(CS%nFreq,CS%nMode), source=-1)
 
   allocate(angles(CS%NAngle), source=0.0)
@@ -2652,6 +2719,20 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
     write(var_descript, '("Near-bottom horizontal velocity for frequency ",i1," mode ",i1)') fr, m
     CS%id_Ub_mode(fr,m) = register_diag_field('ocean_model', var_name, &
                  diag%axesT1, Time, var_descript, 'm s-1', conversion=US%L_T_to_m_s)
+    call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
+
+    ! Register 2-D period-averaged horizonal velocity profile for each freq and mode
+    write(var_name, '("Itide_Uprof_freq",i1,"_mode",i1)') fr, m
+    write(var_descript, '("horizonal velocity profile for frequency ",i1," mode ",i1)') fr, m
+    CS%id_Uprof_mode(fr,m) = register_diag_field('ocean_model', var_name, &
+                 diag%axesTi, Time, var_descript, 'm s-1', conversion=US%L_T_to_m_s)
+    call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
+
+    ! Register 2-D period-averaged vertical velocity profile for each freq and mode
+    write(var_name, '("Itide_Wprof_freq",i1,"_mode",i1)') fr, m
+    write(var_descript, '("vertical velocity profile for frequency ",i1," mode ",i1)') fr, m
+    CS%id_Wprof_mode(fr,m) = register_diag_field('ocean_model', var_name, &
+                 diag%axesTi, Time, var_descript, 'm s-1', conversion=US%L_T_to_m_s)
     call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
 
     ! Register 2-D horizontal phase velocity for each frequency and mode

@@ -753,8 +753,13 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halo
   integer :: sub, sub_it
   integer :: i, j, k, k2, itt, is, ie, js, je, nz, iint, m
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) ::  modal_structure !< Normalized model structure [nondim]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) ::  modal_structure_fder !< Normalized model structure [nondim]
   real :: mode_struct(SZK_(GV)) ! The mode structure [nondim], but it is also temporarily
                          ! in units of [L2 T-2 ~> m2 s-2] after it is modified inside of tdma6.
+  real :: mode_struct_fder(SZK_(GV)) ! The mode structure 1st derivative [nondim], but it is also temporarily
+                         ! in units of [L2 T-2 ~> m2 s-2] after it is modified inside of tdma6.
+
+
   real :: ms_min, ms_max ! The minimum and maximum mode structure values returned from tdma6 [L2 T-2 ~> m2 s-2]
   real :: ms_sq          ! The sum of the square of the values returned from tdma6 [L4 T-4 ~> m4 s-4]
 
@@ -1145,6 +1150,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halo
 
                   ! compute mode structure
                   mode_struct(:) = 0.
+                  mode_struct_fder(:) = 0.
                   mode_struct(1:kc) = 1. ! Uniform flow, first guess
 
                   call tdma6(kc, Igu, Igl, lam_n, mode_struct)
@@ -1175,17 +1181,32 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halo
                 else
                   mode_struct(1:kc)=0.
                 endif
+
+                ! Calculate vertical structure function of u (i.e. dw/dz)
+                ! make a new var for u_strct, w_strct should be mode_struct
+                do K=2,kc-1
+                  mode_struct_fder(K) = 0.5*((mode_struct(K-1) - mode_struct(K)  )/ Hc(k-1) + &
+                                    (mode_struct(K)   - mode_struct(K+1))/ Hc(k))
+                enddo
+                mode_struct_fder(1)   = (mode_struct(1)   -  mode_struct(2) )/ Hc(1)
+                mode_struct_fder(kc) = (mode_struct(kc-1)-  mode_struct(kc))/ Hc(kc-1)
+
                 ! Note that remapping_core_h requires that the same units be used
                 ! for both the source and target grid thicknesses, here [H ~> m or kg m-2].
                 do k = 1,kc
                   Hc_H(k) = GV%Z_to_H * Hc(k)
                 enddo
-                  call remapping_core_h(CS%remapping_CS, kc, Hc_H(:), mode_struct, &
-                                        nz, h(i,j,:), modal_structure(i,j,:), &
-                                        GV%H_subroundoff, GV%H_subroundoff)
+                call remapping_core_h(CS%remapping_CS, kc, Hc_H(:), mode_struct, &
+                                      nz, h(i,j,:), modal_structure(i,j,:), &
+                                      GV%H_subroundoff, GV%H_subroundoff)
+
+                call remapping_core_h(CS%remapping_CS, kc, Hc_H(:), mode_struct_fder, &
+                                      nz, h(i,j,:), modal_structure_fder(i,j,:), &
+                                      GV%H_subroundoff, GV%H_subroundoff)
 
                   ! write the wave structure
                   wavestructCS%w_strct(i,j,:,m) = modal_structure(i,j,:)
+                  wavestructCS%u_strct(i,j,:,m) = modal_structure_fder(i,j,:)
 
               enddo ! n-loop
             endif ! if nmodes>1 .and. kc>nmodes .and. c1>c1_thresh
