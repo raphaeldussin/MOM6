@@ -484,8 +484,10 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
 !            endif
 
         do k=1,nzm
-          Uprof(i,j,k,fr,m) = CS%wave_struct%Uavg_profile(i,j,k,m)
-          Wprof(i,j,k,fr,m) = CS%wave_struct%W_profile(i,j,k,m)
+          !Uprof(i,j,k,fr,m) = CS%wave_struct%Uavg_profile(i,j,k,m)
+          !Wprof(i,j,k,fr,m) = CS%wave_struct%W_profile(i,j,k,m)
+          Uprof(i,j,k,fr,m) = CS%wave_struct%u_strct(i,j,k,m)
+          Wprof(i,j,k,fr,m) = CS%wave_struct%w_strct(i,j,k,m)
         enddo
       enddo ; enddo ! i-loop, j-loop
     enddo ; enddo ! fr-loop, m-loop
@@ -2758,6 +2760,9 @@ subroutine internal_tides_end(CS)
   if (allocated(CS%id_En_mode)) deallocate(CS%id_En_mode)
   if (allocated(CS%id_Ub_mode)) deallocate(CS%id_Ub_mode)
   if (allocated(CS%id_cp_mode)) deallocate(CS%id_cp_mode)
+  if (allocated(CS%id_Uprof_mode)) deallocate(CS%id_Uprof_mode)
+  if (allocated(CS%id_Wprof_mode)) deallocate(CS%id_Wprof_mode)
+
 end subroutine internal_tides_end
 
 end module MOM_internal_tides

@@ -1141,17 +1141,18 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halo
               ! Use Newton's method to find the roots within the identified windows
               do m=1,nrootsfound ! loop over the root-containing widows (excluding 1st mode)
                 lam_n = xbl(m) ! first guess is left edge of window
+
+                ! init and first guess for mode structure
+                mode_struct(:) = 0.
+                mode_struct_fder(:) = 0.
+                mode_struct(1:kc) = 1. ! Uniform flow, first guess
+
                 do itt=1,max_itt
                   ! calculate the determinant of (A-lam_n*I)
                   call tridiag_det(Igu, Igl, 2, kc, lam_n, det, ddet, row_scale=c2_scale)
                   ! Use Newton's method to find a new estimate of lam_n
                   dlam = - det / ddet
                   lam_n = lam_n + dlam
-
-                  ! compute mode structure
-                  mode_struct(:) = 0.
-                  mode_struct_fder(:) = 0.
-                  mode_struct(1:kc) = 1. ! Uniform flow, first guess
 
                   call tdma6(kc, Igu, Igl, lam_n, mode_struct)
                   ! Note that tdma6 changes the units of mode_struct to [L2 T-2 ~> m2 s-2]
@@ -1204,9 +1205,11 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halo
                                       nz, h(i,j,:), modal_structure_fder(i,j,:), &
                                       GV%H_subroundoff, GV%H_subroundoff)
 
-                  ! write the wave structure
-                  wavestructCS%w_strct(i,j,:,m) = modal_structure(i,j,:)
-                  wavestructCS%u_strct(i,j,:,m) = modal_structure_fder(i,j,:)
+                ! write the wave structure
+                !wavestructCS%w_strct(i,j,:,m) = modal_structure(i,j,:)
+                !wavestructCS%u_strct(i,j,:,m) = modal_structure_fder(i,j,:)
+                wavestructCS%w_strct(i,j,:,m) = mode_struct(:)
+                wavestructCS%u_strct(i,j,:,m) = mode_struct_fder(:)
 
               enddo ! n-loop
             endif ! if nmodes>1 .and. kc>nmodes .and. c1>c1_thresh
