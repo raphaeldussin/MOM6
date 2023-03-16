@@ -225,6 +225,8 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed ; nAngle = CS%NAngle
+  nzm = GV%ke
+
   I_rho0 = 1.0 / GV%Rho0
   cn_subRO = 1e-30*US%m_s_to_L_T
   en_subRO = 1e-30*US%W_m2_to_RZ3_T3*US%s_to_T
@@ -517,9 +519,11 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
     ! Pick out maximum baroclinic velocity values; calculate Fr=max(u)/cg
     do m=1,CS%NMode ; do fr=1,CS%Nfreq
       freq2 = CS%frequency(fr)**2
-      do j=jsd,jed ; do i=isd,ied
+      !do j=jsd,jed ; do i=isd,ied
+      do j=js,je ; do i=is,ie
         id_g = i + G%idg_offset ; jd_g = j + G%jdg_offset ! for debugging
         ! Calculate horizontal phase velocity magnitudes
+        ! G%CoriolisBu bounds prob
         f2 = 0.25*((G%CoriolisBu(I,J)**2 + G%CoriolisBu(I-1,J-1)**2) + &
                    (G%CoriolisBu(I-1,J)**2 + G%CoriolisBu(I,J-1)**2))
         Kmag2 = (freq2 - f2) / (cn(i,j,m)**2 + cn_subRO**2)
