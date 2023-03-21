@@ -396,7 +396,7 @@ subroutine diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, &
     if (CS%uniform_test_cg > 0.0) then
       do m=1,CS%nMode ; cn_IGW(:,:,m) = CS%uniform_test_cg ; enddo
     else
-      call wave_speeds(h, tv, G, GV, US, CS%nMode, cn_IGW, CS%wave_speed, CS%int_tide%wave_struct, full_halos=.true.)
+      call wave_speeds(h, tv, G, GV, US, CS%nMode+1, cn_IGW, CS%wave_speed, CS%int_tide%wave_struct, full_halos=.true.)
     endif
 
     call propagate_int_tide(h, tv, cn_IGW, CS%int_tide_input%TKE_itidal_input, CS%int_tide_input%tideamp, &

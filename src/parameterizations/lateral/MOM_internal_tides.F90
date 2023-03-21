@@ -486,10 +486,11 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
 !            endif
 
         do k=1,nzm
+
           !Uprof(i,j,k,fr,m) = CS%wave_struct%Uavg_profile(i,j,k,m)
           !Wprof(i,j,k,fr,m) = CS%wave_struct%W_profile(i,j,k,m)
-          Uprof(i,j,k,fr,m) = CS%wave_struct%u_strct(i,j,k,m)
-          Wprof(i,j,k,fr,m) = CS%wave_struct%w_strct(i,j,k,m)
+          Uprof(i,j,k,1,1) = CS%wave_struct%u_strct(i,j,k,1)
+          Wprof(i,j,k,1,1) = CS%wave_struct%w_strct(i,j,k,1)
         enddo
       enddo ; enddo ! i-loop, j-loop
     enddo ; enddo ! fr-loop, m-loop

@@ -652,6 +652,7 @@ subroutine tdma6(n, a, c, lam, y)
 end subroutine tdma6
 
 !> Calculates the wave speeds for the first few barolinic modes.
+!subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
 subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halos)
   type(ocean_grid_type),                    intent(in)  :: G  !< Ocean grid structure
   type(verticalGrid_type),                  intent(in)  :: GV !< Vertical grid structure
@@ -659,7 +660,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halo
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in) :: h  !< Layer thickness [H ~> m or kg m-2]
   type(thermo_var_ptrs),                    intent(in)  :: tv !< Thermodynamic variables
   integer,                                  intent(in)  :: nmodes !< Number of modes
-  real, dimension(G%isd:G%ied,G%jsd:G%jed,nmodes), intent(out) :: cn !< Waves speeds [L T-1 ~> m s-1]
+  real, dimension(G%isd:G%ied,G%jsd:G%jed,nmodes-1), intent(out) :: cn !< Waves speeds [L T-1 ~> m s-1]
   type(wave_speed_CS),                      intent(in)  :: CS !< Wave speed control struct
   type(wave_structures_CS),                  intent(inout)  :: wavestructCS !< Wave structure control struct
   logical,             optional,            intent(in)  :: full_halos !< If true, do the calculation
@@ -740,7 +741,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halo
   real :: tol_merge  ! The fractional change in estimated wave speed that is allowed
                      ! when deciding to merge layers in the calculation [nondim]
   integer :: kf(SZI_(G)) ! The number of active layers after filtering.
-  integer, parameter :: max_itt = 10
+  integer, parameter :: max_itt = 30
   logical :: use_EOS    ! If true, density is calculated from T & S using the equation of state.
   logical :: better_est ! If true, use an improved estimate of the first mode internal wave speed.
   logical :: merge      ! If true, merge the current layer with the one above.
@@ -1156,6 +1157,11 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halo
 
                   call tdma6(kc, Igu, Igl, lam_n, mode_struct)
                   ! Note that tdma6 changes the units of mode_struct to [L2 T-2 ~> m2 s-2]
+
+                  ! apply BC
+                  mode_struct(1) = 0.
+                  mode_struct(kc) = 0.
+
                   ms_min = mode_struct(1)
                   ms_max = mode_struct(1)
                   ms_sq = mode_struct(1)**2
@@ -1177,11 +1183,11 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halo
                 ! calculate nth mode speed
                 if (lam_n > 0.0) cn(i,j,m+1) = 1.0 / sqrt(lam_n)
 
-                if (mode_struct(1)/=0.) then ! Normalize
-                  mode_struct(1:kc) = mode_struct(1:kc) / mode_struct(1)
-                else
-                  mode_struct(1:kc)=0.
-                endif
+                !if (mode_struct(1)/=0.) then ! Normalize
+                !  mode_struct(1:kc) = mode_struct(1:kc) / mode_struct(1)
+                !else
+                !  mode_struct(1:kc)=0.
+                !endif
 
                 ! Calculate vertical structure function of u (i.e. dw/dz)
                 ! make a new var for u_strct, w_strct should be mode_struct
@@ -1206,10 +1212,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halo
                                       GV%H_subroundoff, GV%H_subroundoff)
 
                 ! write the wave structure
-                !wavestructCS%w_strct(i,j,:,m) = modal_structure(i,j,:)
-                !wavestructCS%u_strct(i,j,:,m) = modal_structure_fder(i,j,:)
-                wavestructCS%w_strct(i,j,:,m) = mode_struct(:)
-                wavestructCS%u_strct(i,j,:,m) = mode_struct_fder(:)
+                wavestructCS%w_strct(i,j,1:nz,nmodes-1) = modal_structure(i,j,:)
+                wavestructCS%u_strct(i,j,1:nz,nmodes-1) = modal_structure_fder(i,j,:)
 
               enddo ! n-loop
             endif ! if nmodes>1 .and. kc>nmodes .and. c1>c1_thresh
