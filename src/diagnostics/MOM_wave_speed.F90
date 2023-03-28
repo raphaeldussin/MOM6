@@ -653,20 +653,21 @@ end subroutine tdma6
 
 !> Calculates the wave speeds for the first few barolinic modes.
 !subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
-subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halos)
+subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_halos)
   type(ocean_grid_type),                    intent(in)  :: G  !< Ocean grid structure
   type(verticalGrid_type),                  intent(in)  :: GV !< Vertical grid structure
   type(unit_scale_type),                    intent(in)  :: US !< A dimensional unit scaling type
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in) :: h  !< Layer thickness [H ~> m or kg m-2]
   type(thermo_var_ptrs),                    intent(in)  :: tv !< Thermodynamic variables
   integer,                                  intent(in)  :: nmodes !< Number of modes
-  real, dimension(G%isd:G%ied,G%jsd:G%jed,nmodes-1), intent(out) :: cn !< Waves speeds [L T-1 ~> m s-1]
+  real, dimension(G%isd:G%ied,G%jsd:G%jed,nmodes-1), intent(out) :: cn_IGW !< Waves speeds [L T-1 ~> m s-1]
   type(wave_speed_CS),                      intent(in)  :: CS !< Wave speed control struct
   type(wave_structures_CS),                  intent(inout)  :: wavestructCS !< Wave structure control struct
   logical,             optional,            intent(in)  :: full_halos !< If true, do the calculation
                                                               !! over the entire data domain.
 
   ! Local variables
+  real, dimension(G%isd:G%ied,G%jsd:G%jed,nmodes) :: cn !< Waves speeds [L T-1 ~> m s-1]
   real, dimension(SZK_(GV)+1) :: &
     dRho_dT, &    ! Partial derivative of density with temperature [R C-1 ~> kg m-3 degC-1]
     dRho_dS, &    ! Partial derivative of density with salinity [R S-1 ~> kg m-3 ppt-1]
@@ -794,10 +795,13 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halo
   ! Zero out all wave speeds.  Values over land or for columns that are too weakly stratified
   ! are not changed from this zero value.
   cn(:,:,:) = 0.0
+  cn_IGW(:,:,:) = 0.0
+  wavestructCS%w_strct(:,:,:,:) = 0.0
+
 
   min_h_frac = tol_Hfrac / real(nz)
   !$OMP parallel do default(private) shared(is,ie,js,je,nz,h,G,GV,US,CS,min_h_frac,use_EOS, &
-  !$OMP                                     Z_to_pres,tv,cn,g_Rho0,nmodes,cg1_min2,better_est, &
+  !$OMP                                     Z_to_pres,tv,cn,cn_IGW,g_Rho0,nmodes,cg1_min2,better_est, &
   !$OMP                                     tol_solve,tol_merge,c2_scale)
   do j=js,je
     !   First merge very thin layers with the one above (or below if they are
@@ -1175,13 +1179,14 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halo
                     dlam = -lam_n
                     mode_struct(1:kc) = abs(mode_struct(1:kc)) / sqrt( ms_sq )
                   else
-                    mode_struct(1:kc) = mode_struct(1:kc) / sqrt( ms_sq )
+                    mode_struct(1:kc) = abs(mode_struct(1:kc)) / sqrt( ms_sq )
                   endif
 
                   if (abs(dlam) < tol_solve*lam_1)  exit
                 enddo ! itt-loop
                 ! calculate nth mode speed
                 if (lam_n > 0.0) cn(i,j,m+1) = 1.0 / sqrt(lam_n)
+                if (lam_n > 0.0) cn_IGW(i,j,m) = 1.0 / sqrt(lam_n)
 
                 !if (mode_struct(1)/=0.) then ! Normalize
                 !  mode_struct(1:kc) = mode_struct(1:kc) / mode_struct(1)
@@ -1212,8 +1217,10 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, wavestructCS, full_halo
                                       GV%H_subroundoff, GV%H_subroundoff)
 
                 ! write the wave structure
-                wavestructCS%w_strct(i,j,1:nz,nmodes-1) = modal_structure(i,j,:)
-                wavestructCS%u_strct(i,j,1:nz,nmodes-1) = modal_structure_fder(i,j,:)
+                do k=1,nz
+                  wavestructCS%w_strct(i,j,k,m) = modal_structure(i,j,k)
+                  wavestructCS%u_strct(i,j,k,m) = modal_structure_fder(i,j,k)
+                enddo
 
               enddo ! n-loop
             endif ! if nmodes>1 .and. kc>nmodes .and. c1>c1_thresh
