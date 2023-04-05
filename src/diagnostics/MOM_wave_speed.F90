@@ -7,7 +7,7 @@ use MOM_diag_mediator, only : post_data, query_averaging_enabled, diag_ctrl
 use MOM_error_handler, only : MOM_error, FATAL, WARNING
 use MOM_file_parser, only : log_version
 use MOM_grid, only : ocean_grid_type
-use MOM_remapping, only : remapping_CS, initialize_remapping, remapping_core_h
+use MOM_remapping, only : remapping_CS, initialize_remapping, remapping_core_h, interpolate_column
 use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : thermo_var_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
@@ -754,9 +754,9 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
   integer :: kc         ! The number of layers in the column after merging
   integer :: sub, sub_it
   integer :: i, j, k, k2, itt, is, ie, js, je, nz, iint, m
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) ::  modal_structure !< Normalized model structure [nondim]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1) ::  modal_structure !< Normalized model structure [nondim]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) ::  modal_structure_fder !< Normalized model structure [nondim]
-  real :: mode_struct(SZK_(GV)) ! The mode structure [nondim], but it is also temporarily
+  real :: mode_struct(SZK_(GV)+1) ! The mode structure [nondim], but it is also temporarily
                          ! in units of [L2 T-2 ~> m2 s-2] after it is modified inside of tdma6.
   real :: mode_struct_fder(SZK_(GV)) ! The mode structure 1st derivative [nondim], but it is also temporarily
                          ! in units of [L2 T-2 ~> m2 s-2] after it is modified inside of tdma6.
@@ -764,6 +764,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
 
   real :: ms_min, ms_max ! The minimum and maximum mode structure values returned from tdma6 [L2 T-2 ~> m2 s-2]
   real :: ms_sq          ! The sum of the square of the values returned from tdma6 [L4 T-4 ~> m4 s-4]
+  real :: Hc_tot
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
@@ -797,11 +798,12 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
   cn(:,:,:) = 0.0
   cn_IGW(:,:,:) = 0.0
   wavestructCS%w_strct(:,:,:,:) = 0.0
+  wavestructCS%u_strct(:,:,:,:) = 0.0
 
 
   min_h_frac = tol_Hfrac / real(nz)
   !$OMP parallel do default(private) shared(is,ie,js,je,nz,h,G,GV,US,CS,min_h_frac,use_EOS, &
-  !$OMP                                     Z_to_pres,tv,cn,cn_IGW,g_Rho0,nmodes,cg1_min2,better_est, &
+  !$OMP                                     Z_to_pres,tv,g_Rho0,nmodes,cg1_min2,better_est, &
   !$OMP                                     tol_solve,tol_merge,c2_scale)
   do j=js,je
     !   First merge very thin layers with the one above (or below if they are
@@ -1028,6 +1030,9 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
 
             ! Calculate Igu, Igl, depth, and N2 at each interior interface
             ! [excludes surface (K=1) and bottom (K=kc+1)]
+            Igl(:) = 0.
+            Igu(:) = 0.
+
             do K=2,kc
               Igl(K) = 1.0/(gprime(K)*Hc(k)) ; Igu(K) = 1.0/(gprime(K)*Hc(k-1))
               if (better_est) then
@@ -1150,7 +1155,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
                 ! init and first guess for mode structure
                 mode_struct(:) = 0.
                 mode_struct_fder(:) = 0.
-                mode_struct(1:kc) = 1. ! Uniform flow, first guess
+                mode_struct(2:kc) = 1. ! Uniform flow, first guess
 
                 do itt=1,max_itt
                   ! calculate the determinant of (A-lam_n*I)
@@ -1159,12 +1164,11 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
                   dlam = - det / ddet
                   lam_n = lam_n + dlam
 
-                  call tdma6(kc, Igu, Igl, lam_n, mode_struct)
+                  call tdma6(kc-1, Igu(2:kc), Igl(2:kc), lam_n, mode_struct(2:kc))
                   ! Note that tdma6 changes the units of mode_struct to [L2 T-2 ~> m2 s-2]
-
                   ! apply BC
                   mode_struct(1) = 0.
-                  mode_struct(kc) = 0.
+                  mode_struct(kc+1) = 0.
 
                   ms_min = mode_struct(1)
                   ms_max = mode_struct(1)
@@ -1174,13 +1178,9 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
                     ms_max = max(ms_max, mode_struct(k))
                     ms_sq = ms_sq + mode_struct(k)**2
                   enddo
-                  if (ms_min<0. .and. ms_max>0.) then ! Any zero crossings => lam is too high
-                    lam_n = 0.5 * ( lam_n - dlam )
-                    dlam = -lam_n
-                    mode_struct(1:kc) = abs(mode_struct(1:kc)) / sqrt( ms_sq )
-                  else
-                    mode_struct(1:kc) = abs(mode_struct(1:kc)) / sqrt( ms_sq )
-                  endif
+
+                  ! normalize
+                  mode_struct(1:kc) = mode_struct(1:kc) / sqrt( ms_sq )
 
                   if (abs(dlam) < tol_solve*lam_1)  exit
                 enddo ! itt-loop
@@ -1188,14 +1188,12 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
                 if (lam_n > 0.0) cn(i,j,m+1) = 1.0 / sqrt(lam_n)
                 if (lam_n > 0.0) cn_IGW(i,j,m) = 1.0 / sqrt(lam_n)
 
-                !if (mode_struct(1)/=0.) then ! Normalize
-                !  mode_struct(1:kc) = mode_struct(1:kc) / mode_struct(1)
-                !else
-                !  mode_struct(1:kc)=0.
-                !endif
+                ! sign is irrelevant, flip to positive if needed
+                if (mode_struct(2)<0.) then
+                   mode_struct(2:kc) = -1. * mode_struct(2:kc)
+                endif
 
                 ! Calculate vertical structure function of u (i.e. dw/dz)
-                ! make a new var for u_strct, w_strct should be mode_struct
                 do K=2,kc-1
                   mode_struct_fder(K) = 0.5*((mode_struct(K-1) - mode_struct(K)  )/ Hc(k-1) + &
                                     (mode_struct(K)   - mode_struct(K+1))/ Hc(k))
@@ -1203,24 +1201,46 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
                 mode_struct_fder(1)   = (mode_struct(1)   -  mode_struct(2) )/ Hc(1)
                 mode_struct_fder(kc) = (mode_struct(kc-1)-  mode_struct(kc))/ Hc(kc-1)
 
+                do k=kc+1,nz
+                  mode_struct_fder(k) = mode_struct_fder(kc)
+                enddo
+
                 ! Note that remapping_core_h requires that the same units be used
                 ! for both the source and target grid thicknesses, here [H ~> m or kg m-2].
+                Hc_tot = 0.
                 do k = 1,kc
                   Hc_H(k) = GV%Z_to_H * Hc(k)
+                  Hc_tot = Hc_tot + Hc(k)
                 enddo
-                call remapping_core_h(CS%remapping_CS, kc, Hc_H(:), mode_struct, &
-                                      nz, h(i,j,:), modal_structure(i,j,:), &
-                                      GV%H_subroundoff, GV%H_subroundoff)
 
-                call remapping_core_h(CS%remapping_CS, kc, Hc_H(:), mode_struct_fder, &
+                ! debugging
+                !if ( abs(Hc_tot - htot(i)) > 1.0e-6 ) then
+                !  print *, "different depths", Hc_tot, htot(i), "at i,j", i, j
+                !endif
+
+                ! for w (diag) interpolate onto all interfaces
+                call interpolate_column(kc, Hc_H(1:kc), mode_struct(1:kc+1), &
+                                        nz, h(i,j,:), modal_structure(i,j,:), .false.)
+
+                ! for u (remap) onto all layers
+                call remapping_core_h(CS%remapping_CS, kc, Hc_H(1:kc), mode_struct_fder(1:kc), &
                                       nz, h(i,j,:), modal_structure_fder(i,j,:), &
                                       GV%H_subroundoff, GV%H_subroundoff)
 
                 ! write the wave structure
-                do k=1,nz
+                do k=1,nz+1
                   wavestructCS%w_strct(i,j,k,m) = modal_structure(i,j,k)
+                enddo
+
+                do k=1,nz
                   wavestructCS%u_strct(i,j,k,m) = modal_structure_fder(i,j,k)
                 enddo
+
+              !if (cn_IGW(i,j,1) > 10.) then
+              !   !call MOM_error(FATAL, "unphysical wave speed at i,j = ", i, j, "cn = ", cn_IGW(i,j,1))
+              !   print *, "unphysical wave speed at i,j = ", i, j, "cn = ", cn_IGW(i,j,1)
+              !endif
+
 
               enddo ! n-loop
             endif ! if nmodes>1 .and. kc>nmodes .and. c1>c1_thresh
