@@ -676,7 +676,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
     S_int, &      ! Salinity interpolated to interfaces [S ~> ppt]
     H_top, &      ! The distance of each filtered interface from the ocean surface [Z ~> m]
     H_bot, &      ! The distance of each filtered interface from the bottom [Z ~> m]
-    gprime        ! The reduced gravity across each interface [L2 Z-1 T-2 ~> m s-2].
+    gprime, &     ! The reduced gravity across each interface [L2 Z-1 T-2 ~> m s-2].
+    N2            ! The Brunt Vaissalla freqency squared [T-2 ~> s-2]
   real, dimension(SZK_(GV),SZI_(G)) :: &
     Hf, &         ! Layer thicknesses after very thin layers are combined [Z ~> m]
     Tf, &         ! Layer temperatures after very thin layers are combined [C ~> degC]
@@ -760,11 +761,19 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
                          ! in units of [L2 T-2 ~> m2 s-2] after it is modified inside of tdma6.
   real :: mode_struct_fder(SZK_(GV)) ! The mode structure 1st derivative [nondim], but it is also temporarily
                          ! in units of [L2 T-2 ~> m2 s-2] after it is modified inside of tdma6.
+  real :: mode_struct_sq(SZK_(GV)+1) ! The square of mode structure [nondim], but it is also temporarily
+                         ! in units of [L2 T-2 ~> m2 s-2] after it is modified inside of tdma6.
+  real :: mode_struct_fder_sq(SZK_(GV)) ! The square of mode structure 1st derivative [nondim], but it is also temporarily
+                         ! in units of [L2 T-2 ~> m2 s-2] after it is modified inside of tdma6.
 
 
   real :: ms_min, ms_max ! The minimum and maximum mode structure values returned from tdma6 [L2 T-2 ~> m2 s-2]
   real :: ms_sq          ! The sum of the square of the values returned from tdma6 [L4 T-4 ~> m4 s-4]
   real :: Hc_tot
+  real :: w2avg          ! A total for renormalization
+  real, parameter :: a_int = 0.5 ! Integral total for normalization
+  real :: renorm         ! Normalization factor
+  real :: int_dwdz2, int_w2, int_N2w2
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
@@ -1032,15 +1041,20 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
             ! [excludes surface (K=1) and bottom (K=kc+1)]
             Igl(:) = 0.
             Igu(:) = 0.
+            N2(:) = 0.
 
             do K=2,kc
               Igl(K) = 1.0/(gprime(K)*Hc(k)) ; Igu(K) = 1.0/(gprime(K)*Hc(k-1))
+              N2(K) = US%L_to_Z**2*gprime(K)/(0.5*(Hc(k)+Hc(k-1)))
               if (better_est) then
                 speed2_tot = speed2_tot + gprime(K)*((H_top(K) * H_bot(K)) * I_Htot)
               else
                 speed2_tot = speed2_tot + gprime(K)*(Hc(k-1)+Hc(k))
               endif
             enddo
+
+            ! Set stratification for surface and bottom (setting equal to nearest interface for now)
+            N2(1) = N2(2) ; N2(kc+1) = N2(kc)
 
             ! Under estimate the first eigenvalue (overestimate the speed) to start with.
             lam_1 = 1.0 / speed2_tot
@@ -1170,20 +1184,29 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
                   mode_struct(1) = 0.
                   mode_struct(kc+1) = 0.
 
-                  ms_min = mode_struct(1)
-                  ms_max = mode_struct(1)
-                  ms_sq = mode_struct(1)**2
-                  do k = 2,kc
-                    ms_min = min(ms_min, mode_struct(k))
-                    ms_max = max(ms_max, mode_struct(k))
-                    ms_sq = ms_sq + mode_struct(k)**2
-                  enddo
+                  !ms_min = mode_struct(1)
+                  !ms_max = mode_struct(1)
+                  !ms_sq = mode_struct(1)**2
+                  !do k = 2,kc
+                  !  ms_min = min(ms_min, mode_struct(k))
+                  !  ms_max = max(ms_max, mode_struct(k))
+                  !  ms_sq = ms_sq + mode_struct(k)**2
+                  !enddo
 
-                  ! normalize
-                  mode_struct(1:kc) = mode_struct(1:kc) / sqrt( ms_sq )
+                  !! normalize
+                  !mode_struct(1:kc) = mode_struct(1:kc) / sqrt( ms_sq )
+
+                  ! renormalization of the integral of the profile
+                  w2avg = 0.0
+                  do k=1,kc
+                    w2avg = w2avg + 0.5*(mode_struct(K)**2+mode_struct(K+1)**2)*Hc(k)
+                  enddo
+                  renorm = sqrt(htot(i)*a_int/w2avg)
+                  do K=1,kc+1 ; mode_struct(K) = renorm * mode_struct(K) ; enddo
 
                   if (abs(dlam) < tol_solve*lam_1)  exit
                 enddo ! itt-loop
+
                 ! calculate nth mode speed
                 if (lam_n > 0.0) cn(i,j,m+1) = 1.0 / sqrt(lam_n)
                 if (lam_n > 0.0) cn_IGW(i,j,m) = 1.0 / sqrt(lam_n)
@@ -1194,15 +1217,43 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
                 endif
 
                 ! Calculate vertical structure function of u (i.e. dw/dz)
-                do K=2,kc-1
-                  mode_struct_fder(K) = 0.5*((mode_struct(K-1) - mode_struct(K)  )/ Hc(k-1) + &
-                                    (mode_struct(K)   - mode_struct(K+1))/ Hc(k))
-                enddo
-                mode_struct_fder(1)   = (mode_struct(1)   -  mode_struct(2) )/ Hc(1)
-                mode_struct_fder(kc) = (mode_struct(kc-1)-  mode_struct(kc))/ Hc(kc-1)
+                ! this is at interface, problem here
+                !do K=2,kc-1
+                !  mode_struct_fder(K) = 0.5*((mode_struct(K-1) - mode_struct(K)  )/ Hc(k-1) + &
+                !                    (mode_struct(K)   - mode_struct(K+1))/ Hc(k))
+                !enddo
+                !mode_struct_fder(1)   = (mode_struct(1)   -  mode_struct(2) )/ Hc(1)
+                !mode_struct_fder(kc) = (mode_struct(kc-1)-  mode_struct(kc))/ Hc(kc-1)
 
+                ! alternative is to write it at the layer point
+                do k=1,kc
+                  mode_struct_fder(k) = (mode_struct(k) - mode_struct(k+1)) / Hc(k)
+                enddo
+
+                ! boundary condition for derivative is no-gradient
                 do k=kc+1,nz
                   mode_struct_fder(k) = mode_struct_fder(kc)
+                enddo
+
+                ! Calculate terms for vertically integrated energy equation
+                int_dwdz2 = 0.0 ; int_w2 = 0.0 ; int_N2w2 = 0.0
+
+                do k=1,kc
+                  mode_struct_fder_sq(k) = mode_struct_fder(k)**2
+                enddo
+                do K=1,kc+1
+                  mode_struct_sq(K) = mode_struct(K)**2
+                enddo
+
+                ! sum over layers
+                do k=1,kc
+                  int_dwdz2 = int_dwdz2 + mode_struct_fder_sq(k) * Hc(k)
+                enddo
+
+                ! vertical integration with Trapezoidal rule
+                do K=1,kc
+                  int_w2 = int_w2 + 0.5*(mode_struct_sq(K)+mode_struct_sq(K+1)) * Hc(k)
+                  int_N2w2 = int_N2w2 + 0.5*(mode_struct_sq(K)*N2(K)+mode_struct_sq(K+1)*N2(K+1)) * Hc(k)
                 enddo
 
                 ! Note that remapping_core_h requires that the same units be used
@@ -1210,7 +1261,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
                 Hc_tot = 0.
                 do k = 1,kc
                   Hc_H(k) = GV%Z_to_H * Hc(k)
-                  Hc_tot = Hc_tot + Hc(k)
+                  !Hc_tot = Hc_tot + Hc(k)
                 enddo
 
                 ! debugging
