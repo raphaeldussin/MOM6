@@ -652,22 +652,26 @@ subroutine tdma6(n, a, c, lam, y)
 end subroutine tdma6
 
 !> Calculates the wave speeds for the first few barolinic modes.
-!subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, full_halos)
-subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_halos)
-  type(ocean_grid_type),                    intent(in)  :: G  !< Ocean grid structure
-  type(verticalGrid_type),                  intent(in)  :: GV !< Vertical grid structure
-  type(unit_scale_type),                    intent(in)  :: US !< A dimensional unit scaling type
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in) :: h  !< Layer thickness [H ~> m or kg m-2]
-  type(thermo_var_ptrs),                    intent(in)  :: tv !< Thermodynamic variables
-  integer,                                  intent(in)  :: nmodes !< Number of modes
-  real, dimension(G%isd:G%ied,G%jsd:G%jed,nmodes-1), intent(out) :: cn_IGW !< Waves speeds [L T-1 ~> m s-1]
-  type(wave_speed_CS),                      intent(in)  :: CS !< Wave speed control struct
-  type(wave_structures_CS),                  intent(inout)  :: wavestructCS !< Wave structure control struct
-  logical,             optional,            intent(in)  :: full_halos !< If true, do the calculation
-                                                              !! over the entire data domain.
+subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, Umax, Ub, int_w2, int_U2, int_N2w2, full_halos)
+  type(ocean_grid_type),                           intent(in)  :: G  !< Ocean grid structure
+  type(verticalGrid_type),                         intent(in)  :: GV !< Vertical grid structure
+  type(unit_scale_type),                           intent(in)  :: US !< A dimensional unit scaling type
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),       intent(in)  :: h  !< Layer thickness [H ~> m or kg m-2]
+  type(thermo_var_ptrs),                           intent(in)  :: tv !< Thermodynamic variables
+  integer,                                         intent(in)  :: nmodes !< Number of modes
+  type(wave_speed_CS),                             intent(in)  :: CS !< Wave speed control struct
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1,nmodes),intent(out) :: w_struct
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV),nmodes),intent(out) :: u_struct
+  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: cn !< Waves speeds [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: Umax
+  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: Ub
+  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_w2
+  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_U2
+  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_N2w2
+  logical,             optional,                   intent(in)  :: full_halos !< If true, do the calculation
+                                                                             !! over the entire data domain.
 
   ! Local variables
-  real, dimension(G%isd:G%ied,G%jsd:G%jed,nmodes) :: cn !< Waves speeds [L T-1 ~> m s-1]
   real, dimension(SZK_(GV)+1) :: &
     dRho_dT, &    ! Partial derivative of density with temperature [R C-1 ~> kg m-3 degC-1]
     dRho_dS, &    ! Partial derivative of density with salinity [R S-1 ~> kg m-3 ppt-1]
@@ -773,7 +777,6 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
   real :: w2avg          ! A total for renormalization
   real, parameter :: a_int = 0.5 ! Integral total for normalization
   real :: renorm         ! Normalization factor
-  real :: int_dwdz2, int_w2, int_N2w2
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
@@ -805,10 +808,11 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
   ! Zero out all wave speeds.  Values over land or for columns that are too weakly stratified
   ! are not changed from this zero value.
   cn(:,:,:) = 0.0
-  cn_IGW(:,:,:) = 0.0
-  wavestructCS%w_strct(:,:,:,:) = 0.0
-  wavestructCS%u_strct(:,:,:,:) = 0.0
-
+  Umax(:,:,:) = 0.0
+  Ub(:,:,:) = 0.0
+  int_w2(:,:,:) = 0.0
+  int_N2w2(:,:,:) = 0.0
+  int_U2(:,:,:) = 0.0
 
   min_h_frac = tol_Hfrac / real(nz)
   !$OMP parallel do default(private) shared(is,ie,js,je,nz,h,G,GV,US,CS,min_h_frac,use_EOS, &
@@ -1209,7 +1213,6 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
 
                 ! calculate nth mode speed
                 if (lam_n > 0.0) cn(i,j,m+1) = 1.0 / sqrt(lam_n)
-                if (lam_n > 0.0) cn_IGW(i,j,m) = 1.0 / sqrt(lam_n)
 
                 ! sign is irrelevant, flip to positive if needed
                 if (mode_struct(2)<0.) then
@@ -1235,9 +1238,11 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
                   mode_struct_fder(k) = mode_struct_fder(kc)
                 enddo
 
-                ! Calculate terms for vertically integrated energy equation
-                int_dwdz2 = 0.0 ; int_w2 = 0.0 ; int_N2w2 = 0.0
+                ! now save maximum value and bottom value
+                Ub(i,j,m) = mode_struct_fder(kc)
+                Umax(i,j,m) = maxval(abs(mode_struct_fder(1:kc)))
 
+                ! Calculate terms for vertically integrated energy equation
                 do k=1,kc
                   mode_struct_fder_sq(k) = mode_struct_fder(k)**2
                 enddo
@@ -1247,13 +1252,13 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
 
                 ! sum over layers
                 do k=1,kc
-                  int_dwdz2 = int_dwdz2 + mode_struct_fder_sq(k) * Hc(k)
+                  int_U2(i,j,m) = int_U2(i,j,m) + mode_struct_fder_sq(k) * Hc(k)
                 enddo
 
                 ! vertical integration with Trapezoidal rule
                 do K=1,kc
-                  int_w2 = int_w2 + 0.5*(mode_struct_sq(K)+mode_struct_sq(K+1)) * Hc(k)
-                  int_N2w2 = int_N2w2 + 0.5*(mode_struct_sq(K)*N2(K)+mode_struct_sq(K+1)*N2(K+1)) * Hc(k)
+                  int_w2(i,j,m) = int_w2(i,j,m) + 0.5*(mode_struct_sq(K)+mode_struct_sq(K+1)) * Hc(k)
+                  int_N2w2(i,j,m) = int_N2w2(i,j,m) + 0.5*(mode_struct_sq(K)*N2(K)+mode_struct_sq(K+1)*N2(K+1)) * Hc(k)
                 enddo
 
                 ! Note that remapping_core_h requires that the same units be used
@@ -1261,13 +1266,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
                 Hc_tot = 0.
                 do k = 1,kc
                   Hc_H(k) = GV%Z_to_H * Hc(k)
-                  !Hc_tot = Hc_tot + Hc(k)
                 enddo
-
-                ! debugging
-                !if ( abs(Hc_tot - htot(i)) > 1.0e-6 ) then
-                !  print *, "different depths", Hc_tot, htot(i), "at i,j", i, j
-                !endif
 
                 ! for w (diag) interpolate onto all interfaces
                 call interpolate_column(kc, Hc_H(1:kc), mode_struct(1:kc+1), &
@@ -1280,13 +1279,14 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn_IGW, CS, wavestructCS, full_
 
                 ! write the wave structure
                 do k=1,nz+1
-                  wavestructCS%w_strct(i,j,k,m) = modal_structure(i,j,k)
+                  w_struct(i,j,k,m+1) = modal_structure(i,j,k)
                 enddo
 
                 do k=1,nz
-                  wavestructCS%u_strct(i,j,k,m) = modal_structure_fder(i,j,k)
+                  u_struct(i,j,k,m+1) = modal_structure_fder(i,j,k)
                 enddo
 
+              ! if CS%debug
               !if (cn_IGW(i,j,1) > 10.) then
               !   !call MOM_error(FATAL, "unphysical wave speed at i,j = ", i, j, "cn = ", cn_IGW(i,j,1))
               !   print *, "unphysical wave speed at i,j = ", i, j, "cn = ", cn_IGW(i,j,1)
