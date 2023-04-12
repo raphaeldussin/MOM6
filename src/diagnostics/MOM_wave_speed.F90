@@ -759,8 +759,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, Uma
   integer :: kc         ! The number of layers in the column after merging
   integer :: sub, sub_it
   integer :: i, j, k, k2, itt, is, ie, js, je, nz, iint, m
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1) ::  modal_structure !< Normalized model structure [nondim]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) ::  modal_structure_fder !< Normalized model structure [nondim]
+  real, dimension(SZK_(GV)+1) ::  modal_structure !< Normalized model structure [nondim]
+  real, dimension(SZK_(GV)) ::  modal_structure_fder !< Normalized model structure [nondim]
   real :: mode_struct(SZK_(GV)+1) ! The mode structure [nondim], but it is also temporarily
                          ! in units of [L2 T-2 ~> m2 s-2] after it is modified inside of tdma6.
   real :: mode_struct_fder(SZK_(GV)) ! The mode structure 1st derivative [nondim], but it is also temporarily
@@ -813,6 +813,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, Uma
   int_w2(:,:,:) = 0.0
   int_N2w2(:,:,:) = 0.0
   int_U2(:,:,:) = 0.0
+  u_struct(:,:,:,:) = 0.
+  w_struct(:,:,:,:) = 0.
 
   min_h_frac = tol_Hfrac / real(nz)
   !$OMP parallel do default(private) shared(is,ie,js,je,nz,h,G,GV,US,CS,min_h_frac,use_EOS, &
@@ -1063,6 +1065,13 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, Uma
             ! Under estimate the first eigenvalue (overestimate the speed) to start with.
             lam_1 = 1.0 / speed2_tot
 
+            ! init and first guess for mode structure
+            mode_struct(:) = 0.
+            mode_struct_fder(:) = 0.
+            mode_struct(2:kc) = 1. ! Uniform flow, first guess
+            modal_structure(:) = 0.
+            modal_structure_fder(:) = 0.
+
             ! Find the first eigen value
             do itt=1,max_itt
               ! calculate the determinant of (A-lam_1*I)
@@ -1080,10 +1089,87 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, Uma
                 lam_1 = lam_1 + dlam
               endif
 
+              call tdma6(kc-1, Igu(2:kc), Igl(2:kc), lam_1, mode_struct(2:kc))
+              ! Note that tdma6 changes the units of mode_struct to [L2 T-2 ~> m2 s-2]
+              ! apply BC
+              mode_struct(1) = 0.
+              mode_struct(kc+1) = 0.
+
+              ! renormalization of the integral of the profile
+              w2avg = 0.0
+              do k=1,kc
+                w2avg = w2avg + 0.5*(mode_struct(K)**2+mode_struct(K+1)**2)*Hc(k)
+              enddo
+              renorm = sqrt(htot(i)*a_int/w2avg)
+              do K=1,kc+1 ; mode_struct(K) = renorm * mode_struct(K) ; enddo
+
               if (abs(dlam) < tol_solve*lam_1) exit
             enddo
 
             if (lam_1 > 0.0) cn(i,j,1) = 1.0 / sqrt(lam_1)
+
+            ! sign of wave structure is irrelevant, flip to positive if needed
+            if (mode_struct(2)<0.) then
+              mode_struct(2:kc) = -1. * mode_struct(2:kc)
+            endif
+
+            ! vertical derivative of w at interfaces lives on the layer points
+            do k=1,kc
+              mode_struct_fder(k) = (mode_struct(k) - mode_struct(k+1)) / Hc(k)
+            enddo
+
+            ! boundary condition for derivative is no-gradient
+            do k=kc+1,nz
+              mode_struct_fder(k) = mode_struct_fder(kc)
+            enddo
+
+            ! now save maximum value and bottom value
+            Ub(i,j,1) = mode_struct_fder(kc)
+            Umax(i,j,1) = maxval(abs(mode_struct_fder(1:kc)))
+
+            ! Calculate terms for vertically integrated energy equation
+            do k=1,kc
+              mode_struct_fder_sq(k) = mode_struct_fder(k)**2
+            enddo
+            do K=1,kc+1
+              mode_struct_sq(K) = mode_struct(K)**2
+            enddo
+
+            ! sum over layers
+            do k=1,kc
+              int_U2(i,j,1) = int_U2(i,j,1) + mode_struct_fder_sq(k) * Hc(k)
+            enddo
+
+            ! vertical integration with Trapezoidal rule
+            do K=1,kc
+              int_w2(i,j,1) = int_w2(i,j,1) + 0.5*(mode_struct_sq(K)+mode_struct_sq(K+1)) * Hc(k)
+              int_N2w2(i,j,1) = int_N2w2(i,j,1) + 0.5*(mode_struct_sq(K)*N2(K)+mode_struct_sq(K+1)*N2(K+1)) * Hc(k)
+            enddo
+
+            ! Note that remapping_core_h requires that the same units be used
+            ! for both the source and target grid thicknesses, here [H ~> m or kg m-2].
+            Hc_tot = 0.
+            do k = 1,kc
+              Hc_H(k) = GV%Z_to_H * Hc(k)
+            enddo
+
+            ! for w (diag) interpolate onto all interfaces
+            call interpolate_column(kc, Hc_H(1:kc), mode_struct(1:kc+1), &
+                                    nz, h(i,j,:), modal_structure(:), .false.)
+
+            ! for u (remap) onto all layers
+            call remapping_core_h(CS%remapping_CS, kc, Hc_H(1:kc), mode_struct_fder(1:kc), &
+                                  nz, h(i,j,:), modal_structure_fder(:), &
+                                  GV%H_subroundoff, GV%H_subroundoff)
+
+            ! write the wave structure
+            do k=1,nz+1
+              w_struct(i,j,k,1) = modal_structure(k)
+            enddo
+
+            do k=1,nz
+              u_struct(i,j,k,1) = modal_structure_fder(k)
+            enddo
 
             ! Find other eigen values if c1 is of significant magnitude, > cn_thresh
             nrootsfound = 0    ! number of extra roots found (not including 1st root)
@@ -1174,6 +1260,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, Uma
                 mode_struct(:) = 0.
                 mode_struct_fder(:) = 0.
                 mode_struct(2:kc) = 1. ! Uniform flow, first guess
+                modal_structure(:) = 0.
+                modal_structure_fder(:) = 0.
 
                 do itt=1,max_itt
                   ! calculate the determinant of (A-lam_n*I)
@@ -1270,20 +1358,20 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, Uma
 
                 ! for w (diag) interpolate onto all interfaces
                 call interpolate_column(kc, Hc_H(1:kc), mode_struct(1:kc+1), &
-                                        nz, h(i,j,:), modal_structure(i,j,:), .false.)
+                                        nz, h(i,j,:), modal_structure(:), .false.)
 
                 ! for u (remap) onto all layers
                 call remapping_core_h(CS%remapping_CS, kc, Hc_H(1:kc), mode_struct_fder(1:kc), &
-                                      nz, h(i,j,:), modal_structure_fder(i,j,:), &
+                                      nz, h(i,j,:), modal_structure_fder(:), &
                                       GV%H_subroundoff, GV%H_subroundoff)
 
                 ! write the wave structure
                 do k=1,nz+1
-                  w_struct(i,j,k,m+1) = modal_structure(i,j,k)
+                  w_struct(i,j,k,m+1) = modal_structure(k)
                 enddo
 
                 do k=1,nz
-                  u_struct(i,j,k,m+1) = modal_structure_fder(i,j,k)
+                  u_struct(i,j,k,m+1) = modal_structure_fder(k)
                 enddo
 
               ! if CS%debug
