@@ -220,6 +220,9 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
   real :: I_D_here ! The inverse of the local depth [Z-1 ~> m-1]
   real :: I_rho0   ! The inverse fo the Boussinesq density [R-1 ~> m3 kg-1]
   real :: freq2    ! The frequency squared [T-2 ~> s-2]
+  real :: PE_term
+  real :: KE_term
+  real :: U_mag, W0
   real :: c_phase  ! The phase speed [L T-1 ~> m s-1]
   real :: loss_rate  ! An energy loss rate [T-1 ~> s-1]
   real :: Fr2_max    ! The column maximum internal wave Froude number squared [nondim]
@@ -246,6 +249,7 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
   ! initialize local arrays
   drag_scale(:,:) = 0.
   Ub(:,:,:,:) = 0.
+  Umax(:,:,:,:) = 0.
 
   ! Set the wave speeds for the modes, using cg(n) ~ cg(1)/n.**********************
   ! This is wrong, of course, but it works reasonably in some cases.
@@ -434,69 +438,42 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
   ! First, find velocity profiles
   if (CS%apply_wave_drag .or. CS%apply_Froude_drag) then
     do m=1,CS%NMode ; do fr=1,CS%Nfreq
-      ! Calculate modal structure for given mode and frequency
-      ! RD wave structure should be known from wave_speeds
-      !call wave_structure(h, tv, G, GV, US, cn(:,:,m), m, CS%frequency(fr), &
-      !                    CS%wave_struct, tot_En_mode(:,:,fr,m), full_halos=.true.)
 
-      ! we still need to get the horizontal speed and energy of the mode
-
-      ! Pick out near-bottom and max horizontal baroclinic velocity values at each point
+      ! compute near-bottom and max horizontal baroclinic velocity values at each point
       do j=jsd,jed ; do i=isd,ied
         id_g = i + G%idg_offset ; jd_g = j + G%jdg_offset ! for debugging
-        !nzm = CS%wave_struct%num_intfaces(i,j)
-        !Ub(i,j,fr,m) = CS%wave_struct%Uavg_profile(i,j,nzm,m)
-        !Umax(i,j,fr,m) = maxval(CS%wave_struct%Uavg_profile(i,j,1:nzm,m))
 
-! compute amplitude from energy
-!        ! Calculate wavenumber magnitude
-!            f2 = (0.25*(G%CoriolisBu(I,J) + G%CoriolisBu(max(I-1,1),max(J-1,1)) + &
-!                        G%CoriolisBu(I,max(J-1,1)) + G%CoriolisBu(max(I-1,1),J)))**2
-!            Kmag2 = (freq**2 - f2) / (cn(i,j)**2 + cg_subRO**2)
-!
-!            ! Calculate terms in vertically integrated energy equation
-!            int_dwdz2 = 0.0 ; int_w2 = 0.0 ; int_N2w2 = 0.0
-!            do K=1,nzm
-!              u_strct2(K) = u_strct(K)**2
-!              w_strct2(K) = w_strct(K)**2
-!            enddo
-!            ! vertical integration with Trapezoidal rule
-!            do k=1,nzm-1
-!              int_dwdz2 = int_dwdz2 + 0.5*(u_strct2(K)+u_strct2(K+1)) * dz(k)
-!              int_w2    = int_w2    + 0.5*(w_strct2(K)+w_strct2(K+1)) * dz(k)
-!              int_N2w2  = int_N2w2  + 0.5*(w_strct2(K)*N2(K)+w_strct2(K+1)*N2(K+1)) * dz(k)
-!            enddo
-!
-!            ! Back-calculate amplitude from energy equation
-!            if (present(En) .and. (freq**2*Kmag2 > 0.0)) then
-!              ! Units here are [R Z ~> kg m-2]
-!              KE_term = 0.25*GV%Rho0*( ((freq**2 + f2) / (freq**2*Kmag2))*US%L_to_Z**2*int_dwdz2 + int_w2 )
-!              PE_term = 0.25*GV%Rho0*( int_N2w2 / freq**2 )
-!              if (En(i,j) >= 0.0) then
-!                W0 = sqrt( En(i,j) / (KE_term + PE_term) )
-!              else
-!                call MOM_error(WARNING, "wave_structure: En < 0.0; setting to W0 to 0.0")
-!                print *, "En(i,j)=", En(i,j), " at ig=", ig, ", jg=", jg
-!                W0 = 0.0
-!              endif
-!              ! Calculate actual vertical velocity profile and derivative
-!              U_mag = W0 * sqrt((freq**2 + f2) / (2.0*freq**2*Kmag2))
-!              do K=1,nzm
-!                W_profile(K) = W0*w_strct(K)
-!                ! dWdz_profile(K) = W0*u_strct(K)
-!                ! Calculate average magnitude of actual horizontal velocity over a period
-!                Uavg_profile(K) = abs(U_mag * u_strct(K))
-!              enddo
-!            else
-!              do K=1,nzm
-!                W_profile(K)    = 0.0
-!                ! dWdz_profile(K) = 0.0
-!                Uavg_profile(K) = 0.0
-!              enddo
-!            endif
+        ! Calculate wavenumber magnitude
+        freq2 = CS%frequency(fr)**2
+
+        f2 = (0.25*(G%CoriolisBu(I,J) + G%CoriolisBu(max(I-1,1),max(J-1,1)) + &
+                    G%CoriolisBu(I,max(J-1,1)) + G%CoriolisBu(max(I-1,1),J)))**2
+        Kmag2 = (freq2 - f2) / (cn(i,j,m)**2 + cn_subRO**2)
 
 
+        ! Back-calculate amplitude from energy equation
+        if (freq2*Kmag2 > 0.0) then
+          ! Units here are [R Z ~> kg m-2]
+          KE_term = 0.25*GV%Rho0*( ((freq2 + f2) / (freq2*Kmag2))*US%L_to_Z**2*CS%int_U2(i,j,m) + &
+                                   CS%int_w2(i,j,m) )
+          PE_term = 0.25*GV%Rho0*( CS%int_N2w2(i,j,m) / freq2 )
 
+          if (tot_En_mode(i,j,fr,m) >= 0.0) then
+            W0 = sqrt( tot_En_mode(i,j,fr,m) / (KE_term + PE_term) )
+          else
+            call MOM_error(WARNING, "MOM internal tides: tot_En_mode < 0.0; setting to W0 to 0.0")
+            W0 = 0.0
+          endif
+
+          U_mag = W0 * sqrt((freq2 + f2) / (2.0*freq2*Kmag2))
+          ! scaled maximum tidal velocity
+          Umax(i,j,fr,m) = abs(U_mag * CS%Umax(i,j,m))
+          ! scaled bottom tidal velocity
+          Ub(i,j,fr,m) = abs(U_mag * CS%Ub(i,j,m))
+        else
+          Umax(i,j,fr,m) = 0.
+          Ub(i,j,fr,m) = 0.
+        endif
 
       enddo ; enddo ! i-loop, j-loop
     enddo ; enddo ! fr-loop, m-loop

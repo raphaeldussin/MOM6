@@ -652,7 +652,7 @@ subroutine tdma6(n, a, c, lam, y)
 end subroutine tdma6
 
 !> Calculates the wave speeds for the first few barolinic modes.
-subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, Umax, Ub, int_w2, int_U2, int_N2w2, full_halos)
+subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, Umax, Ub, Nb, int_w2, int_U2, int_N2w2, full_halos)
   type(ocean_grid_type),                           intent(in)  :: G  !< Ocean grid structure
   type(verticalGrid_type),                         intent(in)  :: GV !< Vertical grid structure
   type(unit_scale_type),                           intent(in)  :: US !< A dimensional unit scaling type
@@ -665,6 +665,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, Uma
   real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: cn !< Waves speeds [L T-1 ~> m s-1]
   real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: Umax
   real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: Ub
+  real, dimension(SZI_(G),SZJ_(G)),                intent(out) :: Nb
   real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_w2
   real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_U2
   real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_N2w2
@@ -810,6 +811,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, Uma
   cn(:,:,:) = 0.0
   Umax(:,:,:) = 0.0
   Ub(:,:,:) = 0.0
+  Nb(:,:) = 0.0
   int_w2(:,:,:) = 0.0
   int_N2w2(:,:,:) = 0.0
   int_U2(:,:,:) = 0.0
@@ -1061,6 +1063,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, Uma
 
             ! Set stratification for surface and bottom (setting equal to nearest interface for now)
             N2(1) = N2(2) ; N2(kc+1) = N2(kc)
+            ! set bottom stratification
+            Nb(i,j) = sqrt(N2(kc+1))
 
             ! Under estimate the first eigenvalue (overestimate the speed) to start with.
             lam_1 = 1.0 / speed2_tot
