@@ -162,7 +162,12 @@ type, public :: int_tide_CS ; !private
   integer, allocatable, dimension(:,:) :: &
              id_En_ang_mode, &
              id_itidal_loss_ang_mode
-  integer, allocatable, dimension(:) :: id_Ustruct_mode, id_Wstruct_mode
+  integer, allocatable, dimension(:) :: &
+             id_Ustruct_mode, &
+             id_Wstruct_mode, &
+             id_int_w2_mode, &
+             id_int_U2_mode, &
+             id_int_N2w2_mode
   !>@}
 
 end type int_tide_CS
@@ -452,16 +457,16 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
 
 
         ! Back-calculate amplitude from energy equation
-        if (freq2*Kmag2 > 0.0) then
+        if ( (G%mask2dT(i,j) > 0.5) .and. (freq2*Kmag2 > 0.0)) then
           ! Units here are [R Z ~> kg m-2]
           KE_term = 0.25*GV%Rho0*( ((freq2 + f2) / (freq2*Kmag2))*US%L_to_Z**2*CS%int_U2(i,j,m) + &
                                    CS%int_w2(i,j,m) )
           PE_term = 0.25*GV%Rho0*( CS%int_N2w2(i,j,m) / freq2 )
 
-          if (tot_En_mode(i,j,fr,m) >= 0.0) then
+          if (KE_term + PE_term > 0.0) then
             W0 = sqrt( tot_En_mode(i,j,fr,m) / (KE_term + PE_term) )
           else
-            call MOM_error(WARNING, "MOM internal tides: tot_En_mode < 0.0; setting to W0 to 0.0")
+            call MOM_error(WARNING, "MOM internal tides: KE + PE <= 0.0; setting to W0 to 0.0")
             W0 = 0.0
           endif
 
@@ -692,6 +697,18 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
 
     do m=1,CS%NMode ; if (CS%id_Wstruct_mode(m) > 0) then
       call post_data(CS%id_Wstruct_mode(m), CS%w_struct(:,:,:,m), CS%diag)
+    endif ; enddo
+
+    do m=1,CS%NMode ; if (CS%id_int_w2_mode(m) > 0) then
+      call post_data(CS%id_int_w2_mode(m), CS%int_w2(:,:,m), CS%diag)
+    endif ; enddo
+
+    do m=1,CS%NMode ; if (CS%id_int_U2_mode(m) > 0) then
+      call post_data(CS%id_int_U2_mode(m), CS%int_U2(:,:,m), CS%diag)
+    endif ; enddo
+
+    do m=1,CS%NMode ; if (CS%id_int_N2w2_mode(m) > 0) then
+      call post_data(CS%id_int_N2w2_mode(m), CS%int_N2w2(:,:,m), CS%diag)
     endif ; enddo
 
     ! Output 2-D horizontal phase velocity for each frequency and mode
@@ -2666,6 +2683,9 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   allocate(CS%id_Ub_mode(CS%nFreq,CS%nMode), source=-1)
   allocate(CS%id_Ustruct_mode(CS%nMode), source=-1)
   allocate(CS%id_Wstruct_mode(CS%nMode), source=-1)
+  allocate(CS%id_int_w2_mode(CS%nMode), source=-1)
+  allocate(CS%id_int_U2_mode(CS%nMode), source=-1)
+  allocate(CS%id_int_N2w2_mode(CS%nMode), source=-1)
   allocate(CS%id_cp_mode(CS%nFreq,CS%nMode), source=-1)
 
   allocate(angles(CS%NAngle), source=0.0)
@@ -2745,6 +2765,24 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
     write(var_descript, '("vertical velocity profile for mode ",i1)') m
     CS%id_Wstruct_mode(m) = register_diag_field('ocean_model', var_name, &
                  diag%axesTi, Time, var_descript, 'm s-1', conversion=US%L_T_to_m_s)
+    call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
+
+    write(var_name, '("Itide_int_w2","_mode",i1)') m
+    write(var_descript, '("integral of w2 for mode ",i1)') m
+    CS%id_int_w2_mode(m) = register_diag_field('ocean_model', var_name, &
+                 diag%axesT1, Time, var_descript, 'm2 s-2', conversion=US%L_T_to_m_s**2)
+    call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
+
+    write(var_name, '("Itide_int_U2","_mode",i1)') m
+    write(var_descript, '("integral of U2 for mode ",i1)') m
+    CS%id_int_U2_mode(m) = register_diag_field('ocean_model', var_name, &
+                 diag%axesT1, Time, var_descript, 'm2 s-2', conversion=US%L_T_to_m_s**2)
+    call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
+
+    write(var_name, '("Itide_int_N2w2","_mode",i1)') m
+    write(var_descript, '("integral of N2w2 for mode ",i1)') m
+    CS%id_int_N2w2_mode(m) = register_diag_field('ocean_model', var_name, &
+                 diag%axesT1, Time, var_descript, 'm2', conversion=US%L_to_m**2)
     call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
 
   enddo
