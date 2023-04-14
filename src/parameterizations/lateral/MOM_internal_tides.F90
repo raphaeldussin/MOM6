@@ -466,7 +466,7 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
           if (KE_term + PE_term > 0.0) then
             W0 = sqrt( tot_En_mode(i,j,fr,m) / (KE_term + PE_term) )
           else
-            call MOM_error(WARNING, "MOM internal tides: KE + PE <= 0.0; setting to W0 to 0.0")
+            !call MOM_error(WARNING, "MOM internal tides: KE + PE <= 0.0; setting to W0 to 0.0")
             W0 = 0.0
           endif
 
