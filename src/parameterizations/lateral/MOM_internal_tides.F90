@@ -95,20 +95,20 @@ type, public :: int_tide_CS ; !private
                         !! summed over angle, frequency and mode [R Z3 T-3 ~> W m-2]
   real, allocatable, dimension(:,:) :: tot_allprocesses_loss !< Energy loss rates due to all processes,
                         !! summed over angle, frequency and mode [R Z3 T-3 ~> W m-2]
-  real, allocatable, dimension(:,:,:) :: Umax !<
-                        !!
-  real, allocatable, dimension(:,:,:) :: Ub !<
-                        !!
-  real, allocatable, dimension(:,:,:) :: int_w2 !<
-                        !!
-  real, allocatable, dimension(:,:,:) :: int_U2 !<
-                        !!
-  real, allocatable, dimension(:,:,:) :: int_N2w2 !<
-                        !!
-  real, allocatable, dimension(:,:,:,:) :: w_struct !<
-                        !!
-  real, allocatable, dimension(:,:,:,:) :: u_struct !<
-                        !!
+  real, allocatable, dimension(:,:,:,:) :: w_struct !< Vertical structure of vertical velocity (normalized)
+                        !! for each frequency and each mode [nondim]
+  real, allocatable, dimension(:,:,:,:) :: u_struct !< Vertical structure of horizontal velocity (normalized and
+                        !! divided by layer thicknesses) for each frequency and each mode [Z-1 ~> m-1]
+  real, allocatable, dimension(:,:,:) :: u_struct_max !< Maximum of u_struct,
+                        !! for each mode [Z-1 ~> m-1]
+  real, allocatable, dimension(:,:,:) :: u_struct_bot !< Bottom value of u_struct,
+                        !! for each mode [Z-1 ~> m-1]
+  real, allocatable, dimension(:,:,:) :: int_w2 !< Vertical integral of w_struct squared,
+                        !! for each mode [Z ~> m]
+  real, allocatable, dimension(:,:,:) :: int_U2 !< Vertical integral of u_struct squared,
+                        !! for each mode [Z-1 ~> m-1]
+  real, allocatable, dimension(:,:,:) :: int_N2w2 !< Depth-integrated Brunt Vaissalla freqency times
+                        !! vertical profile squared, for each mode [Z T-2 ~> m s-2]
   real :: q_itides      !< fraction of local dissipation [nondim]
   real :: En_sum        !< global sum of energy for use in debugging, in MKS units [J]
   type(time_type), pointer :: Time => NULL() !< A pointer to the model's clock.
@@ -225,9 +225,10 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
   real :: I_D_here ! The inverse of the local depth [Z-1 ~> m-1]
   real :: I_rho0   ! The inverse fo the Boussinesq density [R-1 ~> m3 kg-1]
   real :: freq2    ! The frequency squared [T-2 ~> s-2]
-  real :: PE_term
-  real :: KE_term
-  real :: U_mag, W0
+  real :: PE_term  ! total potential energy of profile [R Z ~> kg m-2]
+  real :: KE_term  ! total kinetic energy of profile [R Z ~> kg m-2]
+  real :: U_mag    ! rescaled magnitude of horizontal profile [L Z T-1 ~> m2 s-1]
+  real :: W0       ! rescaled magnitude of vertical profile [Z T-1 ~> m s-1]
   real :: c_phase  ! The phase speed [L T-1 ~> m s-1]
   real :: loss_rate  ! An energy loss rate [T-1 ~> s-1]
   real :: Fr2_max    ! The column maximum internal wave Froude number squared [nondim]
@@ -472,9 +473,9 @@ subroutine propagate_int_tide(h, tv, cn, TKE_itidal_input, vel_btTide, Nb, dt, &
 
           U_mag = W0 * sqrt((freq2 + f2) / (2.0*freq2*Kmag2))
           ! scaled maximum tidal velocity
-          Umax(i,j,fr,m) = abs(U_mag * CS%Umax(i,j,m))
+          Umax(i,j,fr,m) = abs(U_mag * CS%u_struct_max(i,j,m))
           ! scaled bottom tidal velocity
-          Ub(i,j,fr,m) = abs(U_mag * CS%Ub(i,j,m))
+          Ub(i,j,fr,m) = abs(U_mag * CS%u_struct_bot(i,j,m))
         else
           Umax(i,j,fr,m) = 0.
           Ub(i,j,fr,m) = 0.
@@ -2484,8 +2485,8 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   allocate(CS%tot_itidal_loss(isd:ied,jsd:jed), source=0.0)
   allocate(CS%tot_Froude_loss(isd:ied,jsd:jed), source=0.0)
   allocate(CS%tot_residual_loss(isd:ied,jsd:jed), source=0.0)
-  allocate(CS%Ub(isd:ied,jsd:jed,num_mode), source=0.0)
-  allocate(CS%Umax(isd:ied,jsd:jed,num_mode), source=0.0)
+  allocate(CS%u_struct_bot(isd:ied,jsd:jed,num_mode), source=0.0)
+  allocate(CS%u_struct_max(isd:ied,jsd:jed,num_mode), source=0.0)
   allocate(CS%int_w2(isd:ied,jsd:jed,num_mode), source=0.0)
   allocate(CS%int_U2(isd:ied,jsd:jed,num_mode), source=0.0)
   allocate(CS%int_N2w2(isd:ied,jsd:jed,num_mode), source=0.0)
@@ -2757,32 +2758,32 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
     write(var_name, '("Itide_Ustruct","_mode",i1)') m
     write(var_descript, '("horizonal velocity profile for mode ",i1)') m
     CS%id_Ustruct_mode(m) = register_diag_field('ocean_model', var_name, &
-                 diag%axesTl, Time, var_descript, 'm s-1', conversion=US%L_T_to_m_s)
+                 diag%axesTl, Time, var_descript, 'm-1', conversion=US%m_to_L)
     call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
 
     ! Register 3-D internal tide vertical velocity profile for each mode
     write(var_name, '("Itide_Wstruct","_mode",i1)') m
     write(var_descript, '("vertical velocity profile for mode ",i1)') m
     CS%id_Wstruct_mode(m) = register_diag_field('ocean_model', var_name, &
-                 diag%axesTi, Time, var_descript, 'm s-1', conversion=US%L_T_to_m_s)
+                 diag%axesTi, Time, var_descript, '[]')
     call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
 
     write(var_name, '("Itide_int_w2","_mode",i1)') m
     write(var_descript, '("integral of w2 for mode ",i1)') m
     CS%id_int_w2_mode(m) = register_diag_field('ocean_model', var_name, &
-                 diag%axesT1, Time, var_descript, 'm2 s-2', conversion=US%L_T_to_m_s**2)
+                 diag%axesT1, Time, var_descript, 'm', conversion=US%Z_to_m)
     call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
 
     write(var_name, '("Itide_int_U2","_mode",i1)') m
     write(var_descript, '("integral of U2 for mode ",i1)') m
     CS%id_int_U2_mode(m) = register_diag_field('ocean_model', var_name, &
-                 diag%axesT1, Time, var_descript, 'm2 s-2', conversion=US%L_T_to_m_s**2)
+                 diag%axesT1, Time, var_descript, 'm-1', conversion=US%m_to_L)
     call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
 
     write(var_name, '("Itide_int_N2w2","_mode",i1)') m
     write(var_descript, '("integral of N2w2 for mode ",i1)') m
     CS%id_int_N2w2_mode(m) = register_diag_field('ocean_model', var_name, &
-                 diag%axesT1, Time, var_descript, 'm2', conversion=US%L_to_m**2)
+                 diag%axesT1, Time, var_descript, 'm s-2', conversion=US%Z_to_m*US%s_to_T**2)
     call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
 
   enddo
