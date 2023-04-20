@@ -664,15 +664,19 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1,nmodes),intent(out) :: w_struct !< Wave Vertical profile [nondim]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV),nmodes),intent(out) :: u_struct !< Wave Horizontal profile [Z-1 ~> m-1]
   real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: cn !< Waves speeds [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: u_struct_max !< Maximum of wave horizontal profile [Z-1 ~> m-1]
-  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: u_struct_bot !< Bottom value of wave horizontal profile [Z-1 ~> m-1]
-  real, dimension(SZI_(G),SZJ_(G)),                intent(out) :: Nb !< Bottom value of Brunt Vaissalla freqency [T-1 ~> s-1]
+  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: u_struct_max !< Maximum of wave horizontal profile
+                                                                               !! [Z-1 ~> m-1]
+  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: u_struct_bot !< Bottom value of wave horizontal
+                                                                               !! profile [Z-1 ~> m-1]
+  real, dimension(SZI_(G),SZJ_(G)),                intent(out) :: Nb !< Bottom value of Brunt Vaissalla freqency
+                                                                     !! [T-1 ~> s-1]
   real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_w2 !< depth-integrated
                                                                          !! vertical profile squared [Z ~> m]
   real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_U2 !< depth-integrated
                                                                          !! horizontal profile squared [Z-1 ~> m-1]
-  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_N2w2 !< depth-integrated Brunt Vaissalla freqency times
-                                                                           !! vertical profile squared [Z T-2 ~> m s-2]
+  real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_N2w2 !< depth-integrated Brunt Vaissalla
+                                                                           !! frequency times vertical
+                                                                           !! profile squared [Z T-2 ~> m s-2]
   logical,             optional,                   intent(in)  :: full_halos !< If true, do the calculation
                                                                              !! over the entire data domain.
 
