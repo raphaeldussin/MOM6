@@ -12,7 +12,7 @@ use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : thermo_var_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
 use MOM_EOS, only : calculate_density_derivs
-use MOM_wave_structure, only : wave_structure_CS, wave_structures_CS
+use MOM_wave_structure, only : wave_structure_CS
 
 implicit none ; private
 

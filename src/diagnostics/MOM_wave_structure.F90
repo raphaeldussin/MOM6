@@ -27,7 +27,7 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
-public wave_structure, wave_structure_init, wave_structures_init
+public wave_structure, wave_structure_init
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -63,36 +63,6 @@ type, public :: wave_structure_CS ; !private
   logical :: debug                 !< debugging prints
 
 end type wave_structure_CS
-
-!> The control structure for the MOM_wave_structure module
-type, public :: wave_structures_CS ; !private
-  logical :: initialized = .false. !< True if this control structure has been initialized.
-  type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
-                                   !! regulate the timing of diagnostic output.
-  real, allocatable, dimension(:,:,:,:) :: w_strct
-                                   !< Vertical structure of vertical velocity (normalized) [nondim].
-  real, allocatable, dimension(:,:,:,:) :: u_strct
-                                   !< Vertical structure of horizontal velocity (normalized and
-                                   !! divided by layer thicknesses) [Z-1 ~> m-1].
-  real, allocatable, dimension(:,:,:,:) :: W_profile
-                                   !< Vertical profile of w_hat(z), where
-                                   !! w(x,y,z,t) = w_hat(z)*exp(i(kx+ly-freq*t)) is the full time-
-                                   !! varying vertical velocity with w_hat(z) = W0*w_strct(z) [Z T-1 ~> m s-1].
-  real, allocatable, dimension(:,:,:,:) :: Uavg_profile
-                                   !< Vertical profile of the magnitude of horizontal velocity,
-                                   !! (u^2+v^2)^0.5, averaged over a period [L T-1 ~> m s-1].
-  real, allocatable, dimension(:,:,:) :: z_depths
-                                   !< Depths of layer interfaces [Z ~> m].
-  real, allocatable, dimension(:,:,:) :: N2
-                                   !< Squared buoyancy frequency at each interface [T-2 ~> s-2].
-  integer, allocatable, dimension(:,:):: num_intfaces
-                                   !< Number of layer interfaces (including surface and bottom) [nondim].
-  ! logical :: int_tide_source_test  !< If true, apply an arbitrary generation site for internal tide testing
-  ! integer :: int_tide_source_i     !< I Location of generation site
-  ! integer :: int_tide_source_j     !< J Location of generation site
-  logical :: debug                 !< debugging prints
-
-end type wave_structures_CS
 
 contains
 
@@ -819,58 +789,5 @@ subroutine wave_structure_init(Time, G, GV, param_file, diag, CS)
   call log_version(param_file, mdl, version, "")
 
 end subroutine wave_structure_init
-
-subroutine wave_structures_init(Time, G, GV, param_file, diag, CS)
-  type(time_type),         intent(in) :: Time !< The current model time.
-  type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure.
-  type(verticalGrid_type), intent(in) :: GV    !< The ocean's vertical grid structure.
-  type(param_file_type),   intent(in) :: param_file !< A structure to parse for run-time
-                                              !! parameters.
-  type(diag_ctrl), target, intent(in) :: diag !< A structure that is used to regulate
-                                              !! diagnostic output.
-  type(wave_structures_CS), intent(inout) :: CS  !< Wave structure control struct
-
-  ! This include declares and sets the variable "version".
-# include "version_variable.h"
-  character(len=40)  :: mdl = "MOM_wave_structure"  ! This module's name.
-  integer :: isd, ied, jsd, jed, nz
-  integer :: num_mode
-
-  isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed ; nz = GV%ke
-
-  CS%initialized = .true.
-
-  ! call get_param(param_file, mdl, "INTERNAL_TIDE_SOURCE_TEST", CS%int_tide_source_test, &
-  !                "If true, apply an arbitrary generation site for internal tide testing", &
-  !                default=.false.)
-  ! if (CS%int_tide_source_test) then
-  !   call get_param(param_file, mdl, "INTERNAL_TIDE_SOURCE_I", CS%int_tide_source_i, &
-  !                "I Location of generation site for internal tide", default=0)
-  !   call get_param(param_file, mdl, "INTERNAL_TIDE_SOURCE_J", CS%int_tide_source_j, &
-  !                "J Location of generation site for internal tide", default=0)
-  ! endif
-  call get_param(param_file, mdl, "INTERNAL_TIDE_MODES", num_mode, &
-                 "number of internal wave modes", default=1)
-
-  call get_param(param_file, mdl, "DEBUG", CS%debug, &
-                 "debugging prints", default=.false.)
-
-  CS%diag => diag
-
-  ! Allocate memory for variable in control structure; note,
-  ! not all rows will be filled if layers get merged!
-  allocate(CS%w_strct(isd:ied,jsd:jed,nz+1,num_mode))
-  allocate(CS%u_strct(isd:ied,jsd:jed,nz+1,num_mode))
-  allocate(CS%W_profile(isd:ied,jsd:jed,nz+1,num_mode))
-  allocate(CS%Uavg_profile(isd:ied,jsd:jed,nz+1,num_mode))
-  allocate(CS%z_depths(isd:ied,jsd:jed,nz+1))
-  allocate(CS%N2(isd:ied,jsd:jed,nz+1))
-  allocate(CS%num_intfaces(isd:ied,jsd:jed))
-
-  ! Write all relevant parameters to the model log.
-  call log_version(param_file, mdl, version, "")
-
-end subroutine wave_structures_init
-
 
 end module MOM_wave_structure

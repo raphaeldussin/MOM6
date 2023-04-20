@@ -23,7 +23,7 @@ use MOM_time_manager, only  : time_type, time_type_to_real, operator(+), operato
 use MOM_unit_scaling, only  : unit_scale_type
 use MOM_variables, only     : surface, thermo_var_ptrs
 use MOM_verticalGrid, only  : verticalGrid_type
-use MOM_wave_structure, only: wave_structure_init, wave_structures_init, wave_structure, wave_structure_CS, wave_structures_CS
+use MOM_wave_structure, only: wave_structure_init, wave_structure, wave_structure_CS
 
 implicit none ; private
 
@@ -140,7 +140,7 @@ type, public :: int_tide_CS ; !private
 
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to regulate the
                         !! timing of diagnostic output.
-  type(wave_structures_CS) :: wave_struct    !< Wave structure control structure
+  !type(wave_structure_CS) :: wave_struct    !< Wave structure control structure
 
   !>@{ Diag handles
   ! Diag handles relevant to all modes, frequencies, and angles
@@ -2790,7 +2790,7 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
 
 
   ! Initialize wave_structure (not sure if this should be here - BDM)
-  call wave_structures_init(Time, G, GV, param_file, diag, CS%wave_struct)
+  !call wave_structure_init(Time, G, GV, param_file, diag, CS%wave_struct)
 
 end subroutine internal_tides_init
 
