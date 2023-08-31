@@ -177,6 +177,10 @@ type, public :: int_tide_CS ; private
   integer, allocatable, dimension(:,:) :: &
              id_En_mode, &
              id_itidal_loss_mode, &
+             id_leak_loss_mode, &
+             id_quad_loss_mode, &
+             id_Froude_loss_mode, &
+             id_residual_loss_mode, &
              id_allprocesses_loss_mode, &
              id_Ub_mode, &
              id_cp_mode
@@ -244,6 +248,10 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
                    ! energy loss rates summed over angle, freq, and mode [R Z3 T-3 ~> W m-2]
     htot, &        ! The vertical sum of the layer thicknesses [H ~> m or kg m-2]
     itidal_loss_mode, & ! Energy lost due to small-scale wave drag, summed over angles [R Z3 T-3 ~> W m-2]
+    leak_loss_mode, &
+    quad_loss_mode, &
+    Froude_loss_mode, &
+    residual_loss_mode, &
     allprocesses_loss_mode  ! Total energy loss rates for a given mode and frequency (summed over
                    ! all angles) [R Z3 T-3 ~> W m-2]
 
@@ -778,15 +786,27 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
     do m=1,CS%nMode ; do fr=1,CS%Nfreq
     if (CS%id_itidal_loss_mode(fr,m) > 0 .or. CS%id_allprocesses_loss_mode(fr,m) > 0) then
       itidal_loss_mode(:,:) = 0.0 ! wave-drag processes (could do others as well)
+      leak_loss_mode(:,:) = 0.0
+      quad_loss_mode(:,:) = 0.0
+      Froude_loss_mode(:,:) = 0.0
+      residual_loss_mode(:,:) = 0.0
       allprocesses_loss_mode(:,:) = 0.0 ! all processes summed together
       do a=1,CS%nAngle ; do j=js,je ; do i=is,ie
         itidal_loss_mode(i,j)       = itidal_loss_mode(i,j) + CS%TKE_itidal_loss(i,j,a,fr,m)
+        leak_loss_mode(i,j) =  leak_loss_mode(i,j) + CS%TKE_leak_loss(i,j,a,fr,m)
+        quad_loss_mode(i,j) = quad_loss_mode(i,j) + CS%TKE_quad_loss(i,j,a,fr,m)
+        Froude_loss_mode(i,j) = Froude_loss_mode(i,j) + CS%TKE_Froude_loss(i,j,a,fr,m)
+        residual_loss_mode(i,j) = residual_loss_mode(i,j) +  CS%TKE_residual_loss(i,j,a,fr,m)
         allprocesses_loss_mode(i,j) = allprocesses_loss_mode(i,j) + &
                                  ((((CS%TKE_leak_loss(i,j,a,fr,m) + CS%TKE_quad_loss(i,j,a,fr,m)) + &
                                  CS%TKE_itidal_loss(i,j,a,fr,m)) + CS%TKE_Froude_loss(i,j,a,fr,m)) + &
                                  CS%TKE_residual_loss(i,j,a,fr,m))
       enddo ; enddo ; enddo
       call post_data(CS%id_itidal_loss_mode(fr,m), itidal_loss_mode, CS%diag)
+      call post_data(CS%id_leak_loss_mode(fr,m), leak_loss_mode, CS%diag)
+      call post_data(CS%id_quad_loss_mode(fr,m), quad_loss_mode, CS%diag)
+      call post_data(CS%id_Froude_loss_mode(fr,m), Froude_loss_mode, CS%diag)
+      call post_data(CS%id_residual_loss_mode(fr,m), residual_loss_mode, CS%diag)
       call post_data(CS%id_allprocesses_loss_mode(fr,m), allprocesses_loss_mode, CS%diag)
     endif ; enddo ; enddo
 
@@ -2919,6 +2939,10 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   allocate(CS%id_En_mode(CS%nFreq,CS%nMode), source=-1)
   allocate(CS%id_En_ang_mode(CS%nFreq,CS%nMode), source=-1)
   allocate(CS%id_itidal_loss_mode(CS%nFreq,CS%nMode), source=-1)
+  allocate(CS%id_leak_loss_mode(CS%nFreq,CS%nMode), source=-1)
+  allocate(CS%id_quad_loss_mode(CS%nFreq,CS%nMode), source=-1)
+  allocate(CS%id_Froude_loss_mode(CS%nFreq,CS%nMode), source=-1)
+  allocate(CS%id_residual_loss_mode(CS%nFreq,CS%nMode), source=-1)
   allocate(CS%id_allprocesses_loss_mode(CS%nFreq,CS%nMode), source=-1)
   allocate(CS%id_itidal_loss_ang_mode(CS%nFreq,CS%nMode), source=-1)
   allocate(CS%id_Ub_mode(CS%nFreq,CS%nMode), source=-1)
@@ -2957,6 +2981,30 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
     write(var_name, '("Itide_wavedrag_loss_freq",i1,"_mode",i1)') fr, m
     write(var_descript, '("Internal tide energy loss due to wave-drag from frequency ",i1," mode ",i1)') fr, m
     CS%id_itidal_loss_mode(fr,m) = register_diag_field('ocean_model', var_name, &
+                 diag%axesT1, Time, var_descript, 'W m-2', conversion=US%RZ3_T3_to_W_m2)
+    call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
+    ! Leakage loss
+    write(var_name, '("Itide_leak_loss_freq",i1,"_mode",i1)') fr, m
+    write(var_descript, '("Internal tide energy loss due to leakage from frequency ",i1," mode ",i1)') fr, m
+    CS%id_leak_loss_mode(fr,m) = register_diag_field('ocean_model', var_name, &
+                 diag%axesT1, Time, var_descript, 'W m-2', conversion=US%RZ3_T3_to_W_m2)
+    call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
+    ! Quad loss
+    write(var_name, '("Itide_quad_loss_freq",i1,"_mode",i1)') fr, m
+    write(var_descript, '("Internal tide energy quad loss from frequency ",i1," mode ",i1)') fr, m
+    CS%id_quad_loss_mode(fr,m) = register_diag_field('ocean_model', var_name, &
+                 diag%axesT1, Time, var_descript, 'W m-2', conversion=US%RZ3_T3_to_W_m2)
+    call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
+    ! Froude loss
+    write(var_name, '("Itide_froude_loss_freq",i1,"_mode",i1)') fr, m
+    write(var_descript, '("Internal tide energy Froude loss from frequency ",i1," mode ",i1)') fr, m
+    CS%id_froude_loss_mode(fr,m) = register_diag_field('ocean_model', var_name, &
+                 diag%axesT1, Time, var_descript, 'W m-2', conversion=US%RZ3_T3_to_W_m2)
+    call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
+    ! residual losses
+    write(var_name, '("Itide_residual_loss_freq",i1,"_mode",i1)') fr, m
+    write(var_descript, '("Internal tide energy residual loss from frequency ",i1," mode ",i1)') fr, m
+    CS%id_residual_loss_mode(fr,m) = register_diag_field('ocean_model', var_name, &
                  diag%axesT1, Time, var_descript, 'W m-2', conversion=US%RZ3_T3_to_W_m2)
     call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
     ! all loss processes
