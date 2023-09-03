@@ -182,6 +182,7 @@ type, public :: int_tide_CS ; private
              id_Froude_loss_mode, &
              id_residual_loss_mode, &
              id_allprocesses_loss_mode, &
+             id_itide_drag, &
              id_Ub_mode, &
              id_cp_mode
   ! Diag handles considering: all modes, frequencies, and angles
@@ -189,7 +190,6 @@ type, public :: int_tide_CS ; private
              id_En_ang_mode, &
              id_itidal_loss_ang_mode
   integer, allocatable, dimension(:) :: &
-             id_itide_drag, &
              id_TKE_itidal_input, &
              id_Ustruct_mode, &
              id_Wstruct_mode, &
@@ -239,7 +239,7 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
     tot_En_mode, & ! energy summed over angles only [R Z3 T-2 ~> J m-2]
     Ub, &          ! near-bottom horizontal velocity of wave (modal) [L T-1 ~> m s-1]
     Umax           ! Maximum horizontal velocity of wave (modal) [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJ_(G),CS%nFreq) :: &
+  real, dimension(SZI_(G),SZJ_(G),CS%nFreq,CS%nMode) :: &
     drag_scale     ! bottom drag scale [T-1 ~> s-1]
 
   real, dimension(SZI_(G),SZJ_(G)) :: &
@@ -287,7 +287,7 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
   en_subRO = 1e-30*US%W_m2_to_RZ3_T3*US%s_to_T
 
   ! initialize local arrays
-  drag_scale(:,:,:) = 0.
+  drag_scale(:,:,:,:) = 0.
   Ub(:,:,:,:) = 0.
   Umax(:,:,:,:) = 0.
 
@@ -489,23 +489,23 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
     enddo ; enddo ; enddo
     if (GV%Boussinesq) then
       ! This is mathematically equivalent to the form in the option below, but they differ at roundoff.
-      do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
+      do m=1,CS%NMode ; do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
         I_D_here = 1.0 / (max(htot(i,j), CS%drag_min_depth))
-        drag_scale(i,j,fr) = CS%cdrag * sqrt(max(0.0, US%L_to_Z**2*inttide_input_CS%tideamp(i,j,fr)**2 + &
-                             tot_En(i,j) * GV%RZ_to_H * I_D_here)) * GV%Z_to_H*I_D_here
-      enddo ; enddo ; enddo
+        drag_scale(i,j,fr,m) = CS%cdrag * sqrt(max(0.0, US%L_to_Z**2*inttide_input_CS%tideamp(i,j,fr)**2 + &
+                             tot_En_mode(i,j,fr,m) * GV%RZ_to_H * I_D_here)) * GV%Z_to_H*I_D_here
+      enddo ; enddo ; enddo ; enddo
     else
-      do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
+      do m=1,CS%NMode ; do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
         I_mass = GV%RZ_to_H / (max(htot(i,j), CS%drag_min_depth))
-        drag_scale(i,j,fr) = (CS%cdrag * (Rho_bot(i,j)*I_mass)) * &
-                              sqrt(max(0.0, US%L_to_Z**2*inttide_input_CS%tideamp(i,j,fr)**2 + tot_En(i,j) * I_mass))
-      enddo ; enddo ; enddo
+        drag_scale(i,j,fr,m) = (CS%cdrag * (Rho_bot(i,j)*I_mass)) * &
+                              sqrt(max(0.0, US%L_to_Z**2*inttide_input_CS%tideamp(i,j,fr)**2 + tot_En_mode(i,j,fr,m) * I_mass))
+      enddo ; enddo ; enddo ; enddo
     endif
     do m=1,CS%nMode ; do fr=1,CS%nFreq ; do a=1,CS%nAngle ; do j=jsd,jed ; do i=isd,ied
       ! Calculate loss rate and apply loss over the time step ; apply the same drag timescale
       ! to each En component (technically not correct; fix later)
-      CS%TKE_quad_loss(i,j,a,fr,m)  = CS%En(i,j,a,fr,m) * drag_scale(i,j,fr) ! loss rate
-      CS%En(i,j,a,fr,m) = CS%En(i,j,a,fr,m) / (1.0 + dt * drag_scale(i,j,fr)) ! implicit update
+      CS%TKE_quad_loss(i,j,a,fr,m)  = CS%En(i,j,a,fr,m) * drag_scale(i,j,fr,m) ! loss rate
+      CS%En(i,j,a,fr,m) = CS%En(i,j,a,fr,m) / (1.0 + dt * drag_scale(i,j,fr,m)) ! implicit update
     enddo ; enddo ; enddo ; enddo ; enddo
   endif
   ! Check for En<0 - for debugging, delete later
@@ -690,10 +690,13 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
     ! Output two-dimensional diagnostics
     if (CS%id_tot_En > 0)     call post_data(CS%id_tot_En, tot_En, CS%diag)
     do fr=1,CS%nFreq
-      if (CS%id_itide_drag(fr) > 0) call post_data(CS%id_itide_drag(fr), drag_scale(:,:,fr), CS%diag)
       if (CS%id_TKE_itidal_input(fr) > 0) call post_data(CS%id_TKE_itidal_input(fr), &
                                                          inttide_input_CS%TKE_itidal_input(:,:,fr), CS%diag)
     enddo
+
+    do m=1,CS%nMode ; do fr=1,CS%nFreq
+      if (CS%id_itide_drag(fr,m) > 0) call post_data(CS%id_itide_drag(fr,m), drag_scale(:,:,fr,m), CS%diag)
+    enddo ; enddo
 
     ! Output 2-D energy density (summed over angles) for each frequency and mode
     do m=1,CS%nMode ; do fr=1,CS%Nfreq ; if (CS%id_En_mode(fr,m) > 0) then
@@ -2899,20 +2902,14 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
                  Time, 'Internal tide total energy density', &
                  'J m-2', conversion=US%RZ3_T3_to_W_m2*US%T_to_s)
 
-  allocate(CS%id_itide_drag(CS%nFreq), source=-1)
+  allocate(CS%id_itide_drag(CS%nFreq, CS%nMode), source=-1)
   allocate(CS%id_TKE_itidal_input(CS%nFreq), source=-1)
   do fr=1,CS%nFreq
-    ! Register 2-D drag scale used for quadratic bottom drag for each frequency
-    write(var_name, '("ITide_drag_freq",i1)') fr
-    write(var_descript, '("Interior and bottom drag internal tide decay timescale in frequency ",i1)') fr
-
-    CS%id_itide_drag(fr) = register_diag_field('ocean_model', var_name, diag%axesT1, Time, &
-                                               's-1', conversion=US%s_to_T)
     ! Register 2-D energy input into internal tides for each frequency
     write(var_name, '("TKE_itidal_input_freq",i1)') fr
     write(var_descript, '("a fraction of which goes into rays in frequency ",i1)') fr
 
-    CS%id_TKE_itidal_input(fr) = register_diag_field('ocean_model', 'TKE_itidal_input', diag%axesT1, &
+    CS%id_TKE_itidal_input(fr) = register_diag_field('ocean_model', var_name, diag%axesT1, &
                                                      Time, 'Conversion from barotropic to baroclinic tide, '//&
                                                      var_descript, 'W m-2', conversion=US%RZ3_T3_to_W_m2)
   enddo
@@ -3036,6 +3033,12 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
                  diag%axesT1, Time, var_descript, 'm s-1', conversion=US%L_T_to_m_s)
     call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
 
+    ! Register 2-D drag scale used for quadratic bottom drag for each frequency and mode
+    write(var_name, '("ITide_drag_freq",i1,"_mode",i1)') fr, m
+    write(var_descript, '("Interior and bottom drag internal tide decay timescale in frequency ",i1, " mode ",i1)') fr, m
+
+    CS%id_itide_drag(fr,m) = register_diag_field('ocean_model', var_name, diag%axesT1, Time, &
+                                                 's-1', conversion=US%s_to_T)
   enddo ; enddo
 
 
