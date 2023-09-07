@@ -2519,6 +2519,7 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   real    :: RMS_roughness_frac ! The maximum RMS topographic roughness as a fraction of the
                                 ! nominal ocean depth, or a negative value for no limit [nondim]
   real    :: period_1           ! The period of the gravest modeled mode [T ~> s]
+  real    :: period             ! A tidal period read from namelist [T ~> s]
   integer :: num_angle, num_freq, num_mode, m, fr
   integer :: isd, ied, jsd, jed, a, id_ang, i, j, nz
   type(axes_grp) :: axes_ang
@@ -2587,7 +2588,9 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   call read_param(param_file, "TIDAL_PERIODS", periods)
 
   do fr=1,num_freq
-    CS%frequency(fr) = extract_real(periods, " ,", fr, 0.)
+    period = extract_real(periods, " ,", fr, 0.)
+    if (period == 0.) call MOM_error(FATAL, "MOM_internal_tides: invalid tidal period")
+    CS%frequency(fr) = 8.0*atan(1.0)/period
   enddo
 
   ! Read all relevant parameters and write them to the model log.
