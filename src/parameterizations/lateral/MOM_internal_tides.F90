@@ -341,7 +341,7 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
 
   ! Add the forcing.***************************************************************
   if (CS%energized_angle <= 0) then
-    frac_per_sector = 1.0 / real(CS%nAngle * CS%nMode * CS%nFreq)
+    frac_per_sector = 1.0 / real(CS%nAngle)
     do m=1,CS%nMode ; do fr=1,CS%nFreq ; do a=1,CS%nAngle ; do j=js,je ; do i=is,ie
       f2 = 0.25*((G%CoriolisBu(I,J)**2 + G%CoriolisBu(I-1,J-1)**2) + &
                  (G%CoriolisBu(I-1,J)**2 + G%CoriolisBu(I,J-1)**2))
@@ -350,7 +350,7 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
                             CS%fraction_tidal_input(fr,m) * inttide_input_CS%TKE_itidal_input(i,j,fr)
     enddo ; enddo ; enddo ; enddo ; enddo
   elseif (CS%energized_angle <= CS%nAngle) then
-    frac_per_sector = 1.0 / real(CS%nMode * CS%nFreq)
+    frac_per_sector = 1.0
     a = CS%energized_angle
     do m=1,CS%nMode ; do fr=1,CS%nFreq ; do j=js,je ; do i=is,ie
       f2 = 0.25*((G%CoriolisBu(I,J)**2 + G%CoriolisBu(I-1,J-1)**2) + &
@@ -402,6 +402,7 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
   ! Propagate the waves.
   do m=1,CS%nMode ; do fr=1,CS%Nfreq
 
+    ! initialize residual loss, will be computed in propagate
     CS%TKE_residual_loss(:,:,:,fr,m) = 0.
 
     call propagate(CS%En(:,:,:,fr,m), cn(:,:,m), CS%frequency(fr), dt, &
