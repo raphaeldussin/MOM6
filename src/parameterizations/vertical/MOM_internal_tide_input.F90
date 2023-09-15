@@ -37,7 +37,7 @@ public get_input_TKE, get_barotropic_tidal_vel
 ! vary with the Boussinesq approximation, the Boussinesq variant is given first.
 
 !> This control structure holds parameters that regulate internal tide energy inputs.
-type, public :: int_tide_input_CS ; private
+type, public :: int_tide_input_CS
   logical :: initialized = .false. !< True if this control structure has been initialized.
   logical :: debug      !< If true, write verbose checksums for debugging.
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
