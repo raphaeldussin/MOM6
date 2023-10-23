@@ -15,12 +15,17 @@ use MOM_domains, only       : create_group_pass, do_group_pass, pass_var
 use MOM_domains, only       : group_pass_type, start_group_pass, complete_group_pass
 use MOM_error_handler, only : MOM_error, FATAL, WARNING, MOM_mesg, is_root_pe
 use MOM_file_parser, only   : read_param, get_param, log_param, log_version, param_file_type
+use MOM_forcing_type,        only : forcing
 use MOM_grid, only          : ocean_grid_type
+use MOM_interface_heights, only: thickness_to_dz
 use MOM_int_tide_input, only: int_tide_input_CS, get_input_TKE, get_barotropic_tidal_vel
 use MOM_io, only            : slasher, MOM_read_data, file_exists, axis_info
 use MOM_io, only            : set_axis_info, get_axis_info
+use MOM_isopycnal_slopes, only : vert_fill_TS
 use MOM_restart, only       : register_restart_field, MOM_restart_CS, restart_init, save_restart
 use MOM_restart, only       : lock_check, restart_registry_lock
+!use MOM_set_diffusivity, only: set_diffusivity_CS
+!use MOM_set_diffusivity, only: find_N2, set_diffusivity_CS
 use MOM_spatial_means, only : global_area_integral
 use MOM_string_functions, only: extract_real
 use MOM_time_manager, only  : time_type, time_type_to_real, operator(+), operator(/), operator(-)
@@ -106,6 +111,21 @@ type, public :: int_tide_CS ; private
                         !! summed over angle, frequency and mode [R Z3 T-3 ~> W m-2]
   real, allocatable, dimension(:,:) :: tot_allprocesses_loss !< Energy loss rates due to all processes,
                         !! summed over angle, frequency and mode [R Z3 T-3 ~> W m-2]
+
+
+  real, allocatable, dimension(:,:,:) :: tot_leak_diff_profile     !<
+                        !! summed over angle, frequency and mode   []
+  real, allocatable, dimension(:,:,:) :: tot_quad_diff_profile     !< 
+                        !! summed over angle, frequency and mode   []
+  real, allocatable, dimension(:,:,:) :: tot_itidal_diff_profile   !< 
+                        !! summed over angle, frequency and mode   []
+  real, allocatable, dimension(:,:,:) :: tot_Froude_diff_profile   !< 
+                        !! summed over angle, frequency and mode   []
+  real, allocatable, dimension(:,:,:) :: tot_residual_diff_profile !< 
+                        !! summed over angle, frequency and mode   []
+
+
+
   real, allocatable, dimension(:,:,:,:) :: w_struct !< Vertical structure of vertical velocity (normalized)
                         !! for each frequency and each mode [nondim]
   real, allocatable, dimension(:,:,:,:) :: u_struct !< Vertical structure of horizontal velocity (normalized and
@@ -130,6 +150,8 @@ type, public :: int_tide_CS ; private
   real :: drag_min_depth !< The minimum total ocean thickness that will be used in the denominator
                         !! of the quadratic drag terms for internal tides when
                         !! INTERNAL_TIDE_QUAD_DRAG is true [H ~> m or kg m-2]
+  real :: kappa_fill    !< a Timescale for the filling of massless layers
+  real :: gamma_osborn  !< Mixing efficiency from Osborn 1980
   logical :: apply_background_drag
                         !< If true, apply a drag due to background processes as a sink.
   logical :: apply_bottom_drag
@@ -173,6 +195,7 @@ type, public :: int_tide_CS ; private
   ! Diag handles considering: sums over all modes, frequencies, and angles
   integer :: id_tot_leak_loss = -1, id_tot_quad_loss = -1, id_tot_itidal_loss = -1
   integer :: id_tot_Froude_loss = -1, id_tot_residual_loss = -1, id_tot_allprocesses_loss = -1
+  integer :: id_dissip_leak = -1, id_dissip_Froude = -1
   ! Diag handles considering: all modes & frequencies; summed over angles
   integer, allocatable, dimension(:,:) :: &
              id_En_mode, &
@@ -211,7 +234,7 @@ contains
 
 !> Calls subroutines in this file that are needed to refract, propagate,
 !! and dissipate energy density of the internal tide.
-subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_CSp, CS)
+subroutine propagate_int_tide(h, tv, fluxes, Nb, Rho_bot, dt, G, GV, US, inttide_input_CSp, CS)
   type(ocean_grid_type),            intent(inout) :: G  !< The ocean's grid structure.
   type(verticalGrid_type),          intent(in)    :: GV !< The ocean's vertical grid structure.
   type(unit_scale_type),            intent(in)    :: US !< A dimensional unit scaling type
@@ -219,6 +242,7 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
                                     intent(in)    :: h  !< Layer thicknesses [H ~> m or kg m-2]
   type(thermo_var_ptrs),            intent(in)    :: tv !< Pointer to thermodynamic variables
                                                         !! (needed for wave structure).
+  type(forcing),                    intent(in)    :: fluxes !< A structure of thermodynamic surface fluxes
   real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: Nb !< Near-bottom buoyancy frequency [T-1 ~> s-1].
                                                         !! In some cases the input values are used, but in
                                                         !! others this is set along with the wave speeds.
@@ -227,6 +251,7 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
   real,                             intent(in)    :: dt !< Length of time over which to advance
                                                         !! the internal tides [T ~> s].
   type(int_tide_input_CS),          intent(in)    :: inttide_input_CSp !< Internal tide input control structure
+  !type(set_diffusivity_CS),         intent(in) :: set_diff_CS
   type(int_tide_CS),                intent(inout) :: CS !< Internal tide control structure
 
   ! Local variables
@@ -244,6 +269,11 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
     Umax           ! Maximum horizontal velocity of wave (modal) [L T-1 ~> m s-1]
   real, dimension(SZI_(G),SZJ_(G),CS%nFreq,CS%nMode) :: &
     drag_scale     ! bottom drag scale [T-1 ~> s-1]
+
+  !real, dimension(SZI_(G),SZK_(G)+1) :: dRho_int, N2_int
+  real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: N2_lay
+  !real, dimension(SZI_(G)) :: N2_bot !, rho_bot
+
   real, dimension(SZI_(G),SZJ_(G)) :: &
     tot_vel_btTide2, &
     tot_En, &      ! energy summed over angles, modes, frequencies [R Z3 T-2 ~> J m-2]
@@ -257,6 +287,15 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
     residual_loss_mode, &
     allprocesses_loss_mode  ! Total energy loss rates for a given mode and frequency (summed over
                    ! all angles) [R Z3 T-3 ~> W m-2]
+
+  real, dimension(SZI_(G),SZK_(G)) :: &
+    dz, &                ! thicknesses converted to vertical spacing [Z ~> m]
+    profile_N, &         ! normalized vertical profile following N (Brunt-Vaissala) [nondim]
+    profile_N2, &        ! normalized vertical profile following N2 (Brunt-Vaissala) [nondim]
+    profile_StLaurent, &
+    profile_Polzin
+
+  real, dimension(SZI_(G)) :: renorm_N, renorm_N2, renorm_itidal, renorm_quad, renorm_residual
 
   real :: frac_per_sector ! The inverse of the number of angular, modal and frequency bins [nondim]
   real :: f2       ! The squared Coriolis parameter interpolated to a tracer point [T-2 ~> s-2]
@@ -280,12 +319,16 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
   integer :: En_halo_ij_stencil ! The halo size needed for energy advection
   integer :: a, m, fr, i, j, k, is, ie, js, je, isd, ied, jsd, jed, nAngle
   integer :: id_g, jd_g         ! global (decomp-invar) indices (for debugging)
+  integer :: nz
   type(group_pass_type), save :: pass_test, pass_En
   type(time_type) :: time_end
-  logical:: avg_enabled
+  logical:: avg_enabled, use_EOS
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed ; nAngle = CS%NAngle
+  nz = GV%ke
+
+  use_EOS = associated(tv%eqn_of_state)
 
   cn_subRO = 1e-30*US%m_s_to_L_T
   en_subRO = 1e-30*US%W_m2_to_RZ3_T3*US%s_to_T
@@ -336,7 +379,7 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
   else
     call wave_speeds(h, tv, G, GV, US, CS%nMode, cn, CS%wave_speed, &
                      CS%w_struct, CS%u_struct, CS%u_struct_max, CS%u_struct_bot, &
-                     Nb, CS%int_w2, CS%int_U2, CS%int_N2w2, halo_size=2)
+                     Nb, N2_lay, CS%int_w2, CS%int_U2, CS%int_N2w2, halo_size=2)
                    ! The value of halo_size above would have to be larger if there were
                    ! not a halo update between the calls to propagate_x and propagate_y.
                    ! It can be 1 point smaller if teleport is not used.
@@ -878,6 +921,43 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
     endif ; enddo ; enddo
 
   endif
+
+  !call disable_averaging(CS%diag)
+
+  ! Convert losses into diffusivity **********************************************
+
+  do j=js,je
+
+    call thickness_to_dz(h, tv, dz, j, G, GV)
+
+    renorm_N(:) = 0.
+    renorm_N2(:) = 0.
+    profile_N(:,:) = 0.
+    profile_N2(:,:) = 0.
+
+    do i=is,ie ; do k=1,nz
+      renorm_N(i) = renorm_N(i) + sqrt(N2_lay(i,j,k)) * dz(i,k)
+      renorm_N2(i) = renorm_N2(i) + N2_lay(i,j,k) * dz(i,k)
+    enddo ; enddo
+
+    do k=1,nz ; do i=is,ie
+      profile_N(i,k) = sqrt(N2_lay(i,j,k)) / renorm_N(i)
+      profile_N2(i,k) = N2_lay(i,j,k) / renorm_N2(i)
+
+      CS%tot_Froude_diff_profile(i,j,k) = ( CS%gamma_osborn * CS%tot_Froude_loss(i,j) * profile_N(i,k) ) / &
+                                          max( GV%Rho0 * N2_lay(i,j,k), 1e-16 )
+      CS%tot_leak_diff_profile(i,j,k) = ( CS%gamma_osborn * CS%tot_leak_loss(i,j) * profile_N2(i,k) ) / &
+                                        max( GV%Rho0 * N2_lay(i,j,k), 1e-16 )
+
+    enddo ; enddo
+
+  enddo
+
+  ! output diffusivities
+  !call enable_averages(dt, time_end, CS%diag)
+
+  call post_data(CS%id_dissip_leak, CS%tot_leak_diff_profile(:,:,:), CS%diag)
+  call post_data(CS%id_dissip_Froude, CS%tot_Froude_diff_profile(:,:,:), CS%diag)
 
   call disable_averaging(CS%diag)
 
@@ -2743,6 +2823,14 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   call get_param(param_file, mdl, "KAPPA_H2_FACTOR", kappa_h2_factor, &
                "A scaling factor for the roughness amplitude with "//&
                "INT_TIDE_DISSIPATION.",  units="nondim", default=1.0)
+  call get_param(param_file, mdl, "KD_FILL_ITIDES", CS%kappa_fill, & 
+                 "A diapycnal diffusivity that is used to interpolate "//&
+                 "more sensible values of T & S into thin layers in itides.", &
+                 units="m2 s-1", default=1.0e-6, scale=GV%m2_s_to_HZ_T)
+  call get_param(param_file, mdl, "GAMMA_OSBORN", CS%gamma_osborn, &
+               "The mixing efficiency for internan tides from Osborn 1980 ", &
+               units="nondim", default=0.2)
+
 
   ! Allocate various arrays needed for loss rates
   allocate(h2(isd:ied,jsd:jed), source=0.0)
@@ -2764,6 +2852,12 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   allocate(CS%int_N2w2(isd:ied,jsd:jed,num_mode), source=0.0)
   allocate(CS%w_struct(isd:ied,jsd:jed,1:nz+1,num_mode), source=0.0)
   allocate(CS%u_struct(isd:ied,jsd:jed,1:nz,num_mode), source=0.0)
+
+  allocate(CS%tot_leak_diff_profile(isd:ied,jsd:jed,1:nz), source=0.0)
+  allocate(CS%tot_quad_diff_profile(isd:ied,jsd:jed,1:nz), source=0.0)
+  allocate(CS%tot_itidal_diff_profile(isd:ied,jsd:jed,1:nz), source=0.0)
+  allocate(CS%tot_Froude_diff_profile(isd:ied,jsd:jed,1:nz), source=0.0)
+  allocate(CS%tot_residual_diff_profile(isd:ied,jsd:jed,1:nz), source=0.0)
 
   ! Compute the fixed part of the bottom drag loss from baroclinic modes
   call get_param(param_file, mdl, "H2_FILE", h2_file, &
@@ -3100,6 +3194,16 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
     call MOM_mesg("Registering "//trim(var_name)//", Described as: "//var_descript, 5)
 
   enddo
+
+  ! register dissipation for each physical process
+  CS%id_dissip_leak = register_diag_field('ocean_model', 'Kd_leak', diag%axesTL, Time, &
+                                          'Diffusivity from internal tides leakage', 'm2 s-1', &
+                                           conversion=US%Z_to_m**2*US%s_to_T)
+
+  CS%id_dissip_Froude = register_diag_field('ocean_model', 'Kd_Froude', diag%axesTL, Time, &
+                                            'Diffusivity from internal tides Froude', 'm2 s-1', &
+                                             conversion=US%Z_to_m**2*US%s_to_T)
+
 
   ! Initialize the module that calculates the wave speeds.
   call wave_speed_init(CS%wave_speed, c1_thresh=IGW_c1_thresh)

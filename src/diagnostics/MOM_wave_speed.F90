@@ -747,7 +747,7 @@ subroutine tdma6(n, a, c, lam, y)
 end subroutine tdma6
 
 !> Calculates the wave speeds for the first few barolinic modes.
-subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_struct_max, u_struct_bot, Nb, int_w2, &
+subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_struct_max, u_struct_bot, Nb, N2_lay, int_w2, &
                        int_U2, int_N2w2, halo_size)
   type(ocean_grid_type),                           intent(in)  :: G  !< Ocean grid structure
   type(verticalGrid_type),                         intent(in)  :: GV !< Vertical grid structure
@@ -766,6 +766,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
                                                                      !! velocity profile [Z-1 ~> m-1]
   real, dimension(SZI_(G),SZJ_(G)),                intent(out) :: Nb !< Bottom value of buoyancy freqency
                                                                      !! [T-1 ~> s-1]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),       intent(out) :: N2_lay
   real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_w2 !< depth-integrated vertical velocity
                                                                      !! profile squared [H ~> m or kg m-2]
   real, dimension(SZI_(G),SZJ_(G),nmodes),         intent(out) :: int_U2 !< depth-integrated horizontal velocity
@@ -775,7 +776,6 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
                                                                      !! squared [H T-2 ~> m s-2 or kg m-2 s-2]
   integer,                               optional, intent(in)  :: halo_size !< Width of halo within which to
                                                                      !! calculate wave speeds
-
   ! Local variables
   real, dimension(SZK_(GV)+1) :: &
     dRho_dT, &    ! Partial derivative of density with temperature [R C-1 ~> kg m-3 degC-1]
@@ -804,7 +804,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
     dzc, &        ! A column of layer vertical extents after convective instabilities are removed [Z ~> m]
     Tc, &         ! A column of layer temperatures after convective instabilities are removed [C ~> degC]
     Sc, &         ! A column of layer salinities after convective instabilities are removed [S ~> ppt]
-    Rc            ! A column of layer densities after convective instabilities are removed [R ~> kg m-3]
+    Rc, &         ! A column of layer densities after convective instabilities are removed [R ~> kg m-3]
+    N2l           ! The buoyancy freqency squared in layer [T-2 ~> s-2]
   real :: I_Htot  ! The inverse of the total filtered thicknesses [H-1 ~> m-1 or m2 kg-1]
   real :: c2_scale ! A scaling factor for wave speeds to help control the growth of the determinant and its
                    ! derivative with lam between rows of the Thomas algorithm solver [L2 s2 T-2 m-2 ~> nondim].
@@ -930,6 +931,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
   int_U2(:,:,:) = 0.0
   u_struct(:,:,:,:) = 0.0
   w_struct(:,:,:,:) = 0.0
+  N2_lay(:,:,:) = 0.0
 
   min_h_frac = tol_Hfrac / real(nz)
   !$OMP parallel do default(private) shared(is,ie,js,je,nz,h,G,GV,US,CS,use_EOS,nonBous, &
@@ -1268,6 +1270,10 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
             ! set bottom stratification
             Nb(i,j) = sqrt(N2(kc+1))
 
+            do k=1,kc
+              N2l(k) = 0.5 * (N2(k) + N2(k+1))
+            enddo
+
             ! Under estimate the first eigenvalue (overestimate the speed) to start with.
             lam_1 = 1.0 / speed2_tot
 
@@ -1360,6 +1366,13 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
             ! for u (remap) onto all layers
             call remapping_core_h(CS%remapping_CS, kc, Hc(1:kc), mode_struct_fder(1:kc), &
                                   nz, h(i,j,:), modal_structure_fder(:), &
+                                  GV%H_subroundoff, GV%H_subroundoff)
+
+            ! for N2_lay, remap on all layers
+            !call interpolate_column(kc, Hc_H(1:kc), N2(1:kc+1), &
+            !                        nz, h(i,j,:), N2_lay(i,j,:), .false.)
+            call remapping_core_h(CS%remapping_CS, kc, Hc_H(1:kc), N2l(1:kc), &
+                                  nz, h(i,j,:), N2_lay(i,j,:), &
                                   GV%H_subroundoff, GV%H_subroundoff)
 
             ! write the wave structure
@@ -1536,6 +1549,11 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
                 ! for u (remap) onto all layers
                 call remapping_core_h(CS%remapping_CS, kc, Hc(1:kc), mode_struct_fder(1:kc), &
                                       nz, h(i,j,:), modal_structure_fder(:), &
+                                      GV%H_subroundoff, GV%H_subroundoff)
+
+                ! for N2_lay, remap on all layers
+                call remapping_core_h(CS%remapping_CS, kc, Hc_H(1:kc), N2l(1:kc), &
+                                      nz, h(i,j,:), N2_lay(i,j,:), &
                                       GV%H_subroundoff, GV%H_subroundoff)
 
                 ! write the wave structure
