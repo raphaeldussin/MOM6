@@ -922,8 +922,6 @@ subroutine propagate_int_tide(h, tv, fluxes, Nb, Rho_bot, dt, G, GV, US, inttide
 
   endif
 
-  !call disable_averaging(CS%diag)
-
   ! Convert losses into diffusivity **********************************************
 
   do j=js,je
@@ -936,13 +934,18 @@ subroutine propagate_int_tide(h, tv, fluxes, Nb, Rho_bot, dt, G, GV, US, inttide
     profile_N2(:,:) = 0.
 
     do i=is,ie ; do k=1,nz
-      renorm_N(i) = renorm_N(i) + sqrt(N2_lay(i,j,k)) * dz(i,k)
-      renorm_N2(i) = renorm_N2(i) + N2_lay(i,j,k) * dz(i,k)
+      renorm_N(i) = renorm_N(i) + (sqrt(N2_lay(i,j,k)) * dz(i,k))
+      renorm_N2(i) = renorm_N2(i) + (N2_lay(i,j,k) * dz(i,k))
     enddo ; enddo
 
     do k=1,nz ; do i=is,ie
-      profile_N(i,k) = sqrt(N2_lay(i,j,k)) / renorm_N(i)
-      profile_N2(i,k) = N2_lay(i,j,k) / renorm_N2(i)
+      if (renorm_N(i) > 1e-16) then
+        profile_N(i,k) = sqrt(N2_lay(i,j,k)) / renorm_N(i)
+        profile_N2(i,k) = N2_lay(i,j,k) / renorm_N2(i)
+      else
+        profile_N(i,k) = 0.
+        profile_N2(i,k) = 0.
+      endif
 
       CS%tot_Froude_diff_profile(i,j,k) = ( CS%gamma_osborn * CS%tot_Froude_loss(i,j) * profile_N(i,k) ) / &
                                           max( GV%Rho0 * N2_lay(i,j,k), 1e-16 )
@@ -954,10 +957,9 @@ subroutine propagate_int_tide(h, tv, fluxes, Nb, Rho_bot, dt, G, GV, US, inttide
   enddo
 
   ! output diffusivities
-  !call enable_averages(dt, time_end, CS%diag)
 
-  call post_data(CS%id_dissip_leak, CS%tot_leak_diff_profile(:,:,:), CS%diag)
-  call post_data(CS%id_dissip_Froude, CS%tot_Froude_diff_profile(:,:,:), CS%diag)
+  if (CS%id_dissip_leak > 0) call post_data(CS%id_dissip_leak, CS%tot_leak_diff_profile(:,:,:), CS%diag)
+  if (CS%id_dissip_Froude > 0) call post_data(CS%id_dissip_Froude, CS%tot_Froude_diff_profile(:,:,:), CS%diag)
 
   call disable_averaging(CS%diag)
 

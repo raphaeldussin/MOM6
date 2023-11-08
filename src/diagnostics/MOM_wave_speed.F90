@@ -805,6 +805,7 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
     Tc, &         ! A column of layer temperatures after convective instabilities are removed [C ~> degC]
     Sc, &         ! A column of layer salinities after convective instabilities are removed [S ~> ppt]
     Rc, &         ! A column of layer densities after convective instabilities are removed [R ~> kg m-3]
+    Hc_H, &
     N2l           ! The buoyancy freqency squared in layer [T-2 ~> s-2]
   real :: I_Htot  ! The inverse of the total filtered thicknesses [H-1 ~> m-1 or m2 kg-1]
   real :: c2_scale ! A scaling factor for wave speeds to help control the growth of the determinant and its
@@ -1369,11 +1370,8 @@ subroutine wave_speeds(h, tv, G, GV, US, nmodes, cn, CS, w_struct, u_struct, u_s
                                   GV%H_subroundoff, GV%H_subroundoff)
 
             ! for N2_lay, remap on all layers
-            !call interpolate_column(kc, Hc_H(1:kc), N2(1:kc+1), &
-            !                        nz, h(i,j,:), N2_lay(i,j,:), .false.)
-            call remapping_core_h(CS%remapping_CS, kc, Hc_H(1:kc), N2l(1:kc), &
-                                  nz, h(i,j,:), N2_lay(i,j,:), &
-                                  GV%H_subroundoff, GV%H_subroundoff)
+            call interpolate_column(kc, Hc_H(1:kc), N2l(1:kc), &
+                                    nz, h(i,j,:), N2_lay(i,j,:), .false.)
 
             ! write the wave structure
             do k=1,nz+1
