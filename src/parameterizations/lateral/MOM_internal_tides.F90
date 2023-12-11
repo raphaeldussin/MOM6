@@ -30,7 +30,7 @@ use MOM_spatial_means, only : global_area_integral
 use MOM_string_functions, only: extract_real
 use MOM_time_manager, only  : time_type, time_type_to_real, operator(+), operator(/), operator(-)
 use MOM_unit_scaling, only  : unit_scale_type
-use MOM_variables, only     : surface, thermo_var_ptrs
+use MOM_variables, only     : surface, thermo_var_ptrs, vertvisc_type
 use MOM_verticalGrid, only  : verticalGrid_type
 use MOM_wave_speed, only    : wave_speeds, wave_speed_CS, wave_speed_init
 
@@ -179,6 +179,8 @@ type, public :: int_tide_CS ; private
                         !< The internal wave energy density as a function of (i,j,angle,freq) for mode 5
 
   real, allocatable, dimension(:) :: frequency  !< The frequency of each band [T-1 ~> s-1].
+  real :: Int_tide_decay_scale  !< vertical decay scale for St Laurent profile [Z ~> m]
+  real :: Int_tide_decay_scale_slope  !< vertical decay scale for St Laurent profile on slopes [Z ~> m]
 
   type(wave_speed_CS) :: wave_speed  !< Wave speed control structure
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to regulate the
@@ -1117,16 +1119,17 @@ subroutine get_lowmode_loss(i,j,G,CS,mechanism,TKE_loss_sum)
   real,                  intent(out) :: TKE_loss_sum !< Total energy loss rate due to specified
                                                      !! mechanism [R Z3 T-3 ~> W m-2].
 
-  if (mechanism == 'LeakDrag') TKE_loss_sum = CS%tot_leak_loss(i,j)   ! not used for mixing yet
-  if (mechanism == 'QuadDrag') TKE_loss_sum = CS%tot_quad_loss(i,j)   ! not used for mixing yet
-  if (mechanism == 'WaveDrag') TKE_loss_sum = CS%tot_itidal_loss(i,j) ! currently used for mixing
-  if (mechanism == 'Froude')   TKE_loss_sum = CS%tot_Froude_loss(i,j) ! not used for mixing yet
+  if (mechanism == 'LeakDrag')  TKE_loss_sum = CS%tot_leak_loss(i,j)   ! not used for mixing yet
+  if (mechanism == 'QuadDrag')  TKE_loss_sum = CS%tot_quad_loss(i,j)   ! not used for mixing yet
+  if (mechanism == 'WaveDrag')  TKE_loss_sum = CS%tot_itidal_loss(i,j) ! currently used for mixing
+  if (mechanism == 'Froude')    TKE_loss_sum = CS%tot_Froude_loss(i,j) ! not used for mixing yet
+  if (mechanism == 'SlopeDrag') TKE_loss_sum = CS%tot_residual_loss(i,j) ! not used for mixing yet
 
 end subroutine get_lowmode_loss
 
 
 !> Returns the values of diffusivity corresponding to various mechanisms
-subroutine get_lowmode_diffusivity(G, GV, h, tv, dz, j, N2_lay, N2_int, TKE_to_Kd, Kd_max, CS, &
+subroutine get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TKE_to_Kd, Kd_max, CS, &
                                    Kd_leak, Kd_quad, Kd_itidal, Kd_Froude, Kd_slope, &
                                    Kd_lay, Kd_int)
 
@@ -1137,6 +1140,9 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, dz, j, N2_lay, N2_int, TKE_to_K
   type(thermo_var_ptrs),            intent(in)    :: tv   !< Structure containing pointers to any available
 
   !type(unit_scale_type),             intent(in)    :: US     !< A dimensional unit scaling type
+  type(vertvisc_type),       intent(in) :: visc !< Structure containing vertical viscosities, bottom
+                                                   !! boundary layer properties and related fields.
+
   real, dimension(SZI_(G),SZK_(GV)), intent(in) :: dz !< Geometric layer thicknesses in height units [Z ~> m]
 
   integer,                           intent(in)    :: j      !< The j-index to work on
@@ -1180,11 +1186,25 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, dz, j, N2_lay, N2_int, TKE_to_K
 
   ! local variables
   real :: TKE_loss          ! temp variable to pass value of internal tides TKE loss [W/m2]
-  real :: renorm_N          ! renormalization for N profile [s-2]
-  real :: renorm_N2         ! renormalization for N2 profile [s-2]
+  real :: renorm_N          ! renormalization for N profile [Z T-1 ~> m s-1]
+  real :: renorm_N2         ! renormalization for N2 profile [Z T-2 ~> m s-2]
+  !real :: renorm_StLaurent  ! renormalization for StLaurent profile [ ~> ]
+  real :: total_depth       ! total depth of water column [Z ~> m]
+  real :: zdepth            ! local value of depth in layers [Z ~> m]
+  real :: z_d               ! expomential decay length scale [Z ~> m]
+  real :: z_s               ! expomential decay length scale on the slope [Z ~> m]
+  real :: I_z_d             ! inverse of expomential decay length scale [Z-1 ~> m-1]
+  real :: I_z_s             ! inverse of expomential decay length scale on the slope [Z-1 ~> m-1]
+  real :: hbbl              ! thickness of BBL at h-point [Z ~> m]
+  real :: hbbl_full         ! thickness of BBL at h-point from layers fully included in BBL [Z ~> m]
+  real :: dzrem             ! remaining thickness in BBL to layer number computation [Z ~> m]
 
-  real, dimension(SZK_(GV)) :: profile_N  ! vertical profile varying with N [nondim]
-  real, dimension(SZK_(GV)) :: profile_N2 ! vertical profile varying with N2 [nondim]
+  ! vertical profiles have units Z-1 for conversion to Kd to be dim correct (see eq 2 of St Laurent GRL 2002)
+  real, dimension(SZK_(GV)) :: profile_N  ! vertical profile varying with N [Z-1 ~> m-1]
+  real, dimension(SZK_(GV)) :: profile_N2 ! vertical profile varying with N2 [Z-1 ~> m-1]
+  real, dimension(SZK_(GV)) :: profile_StLaurent ! vertical profile according to St Laurent 2002 [Z-1 ~> m-1]
+  real, dimension(SZK_(GV)) :: profile_StLaurent_slope ! vertical profile according to St Laurent 2002 [Z-1 ~> m-1]
+  real, dimension(SZK_(GV)) :: profile_BBL             ! vertical profile Heavyside BBL  [Z-1 ~> m-1]
 
   real, dimension(SZK_(GV)) :: profile_leak
   real, dimension(SZK_(GV)) :: profile_quad
@@ -1199,8 +1219,13 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, dz, j, N2_lay, N2_int, TKE_to_K
   real, dimension(SZK_(GV)) :: Kd_slope_lay
 
   integer :: i, k, is, ie, nz
-
+  integer :: kbbl ! top layer of the BBL
   is=G%isc ; ie=G%iec ; nz=GV%ke
+
+  z_d = CS%Int_tide_decay_scale
+  z_s = CS%Int_tide_decay_scale_slope
+  I_z_d = 1 / z_d
+  I_z_s = 1 / z_s
 
   ! init output arrays
   Kd_leak(:,:) = 0.
@@ -1213,23 +1238,75 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, dz, j, N2_lay, N2_int, TKE_to_K
     ! create vertical profiles for diffusivites in layers
     renorm_N = 0.
     renorm_N2 = 0.
+    total_depth = 0.
+    zdepth = 0.
+    hbbl_full=0.
+
+    ! compute total depth
     do k=1,nz
-      renorm_N = renorm_N + (sqrt(N2_lay(i,k)) * dz(i,k))
-      renorm_N2 = renorm_N2 + (N2_lay(i,k) * dz(i,k))
+      total_depth = total_depth + dz(i,k)
     enddo
+
+    ! estimate BBL thickness at h-point
+    hbbl = 0.25*((visc%bbl_thick_u(I-1,j) + visc%bbl_thick_u(I,j)) + &
+                 (visc%bbl_thick_u(i,J-1) + visc%bbl_thick_u(i,J)))
+
+    ! by default, top level of BBL is last level
+    kbbl=nz
+    dzrem = hbbl - dz(i,nz)
+    ! only include layers fully in BBL
+    do k=nz-1,1,-1
+      dzrem = hbbl - dz(i,k)      
+      if (dzrem >=0) kbbl = kbbl -1
+    enddo
+
     do k=1,nz
+      ! N-profile
+      renorm_N = renorm_N + (sqrt(N2_lay(i,k)) * dz(i,k))
+      ! N2-profile
+      renorm_N2 = renorm_N2 + (N2_lay(i,k) * dz(i,k))
+      ! BBL-profile
+      if (k>=kbbl) hbbl_full = hbbl_full + dz(i,k)
+    enddo
+
+    do k=1,nz
+      ! N - profile
       if (renorm_N > 0.) then
          profile_N(k) = sqrt(N2_lay(i,k)) / renorm_N
       else
          profile_N(k) = 0.
       endif
 
+      ! N2 - profile
       if (renorm_N2 > 0.) then
         profile_N2(k) = N2_lay(i,k) / renorm_N2
       else
          profile_N2(k) = 0.
       endif
+
+      ! BBL-profile
+      profile_BBL(:) = 0. 
+      if ((k>=kbbl) .and. (hbbl_full > 0.)) profile_BBL = 1 / hbbl_full
+
+      ! slope intensified (St Laurent GRL 2002) - profile
+      ! in paper, z is defined positive upwards, range 0 to -H
+      ! here depth positive downwards
+      
+      ! add first half of layer: get to the layer center
+      zdepth = zdepth + 0.5*dz(i,k)
+
+      profile_StLaurent(k) = exp(-I_z_d*(total_depth-zdepth)) / &
+                            (z_d*(1 - exp(-I_z_d*total_depth)))
+
+      profile_StLaurent_slope(k) = exp(-I_z_s*(total_depth-zdepth)) / &
+                                  (z_s*(1 - exp(-I_z_s*total_depth)))
+
+      ! add second half of layer: get to the next interface
+      zdepth = zdepth + 0.5*dz(i,k)
     enddo
+
+    ! note on units: TKE_to_Kd = 1 / ((g/rho0) * drho) Z-1 T2
+    ! mult by dz gives -1/N2 in T2
 
     ! get TKE loss value and compute diffusivites in layers
     if (CS%apply_background_drag) then
@@ -1243,9 +1320,77 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, dz, j, N2_lay, N2_int, TKE_to_K
       ! endif
       do k=1,nz
         ! layer diffusivity for processus
-        Kd_leak_lay(k) = TKE_loss * TKE_to_Kd(i,k) * profile_leak(k)
+        Kd_leak_lay(k) = TKE_loss * TKE_to_Kd(i,k) * profile_leak(k) * dz(i,k) / GV%Rho0
         ! add to total Kd in layer
         Kd_lay(i,k) = Kd_lay(i,k) + min(Kd_leak_lay(k), Kd_max)
+      enddo
+    endif
+
+    if (CS%apply_Froude_drag) then
+      call get_lowmode_loss(i, j, G, CS, "Froude", TKE_loss)
+      ! insert logic to switch between profiles here
+      ! if trim(CS%Froude_profile) == "N" then
+      profile_Froude(:) = profile_N(:)
+      ! elseif trim(CS%Froude_profile) == "N2" then
+      ! profile_Froude(:) = profile_N2(:)
+      ! something else
+      ! endif
+      do k=1,nz
+        ! layer diffusivity for processus
+        Kd_Froude_lay(k) = TKE_loss * TKE_to_Kd(i,k) * profile_Froude(k) * dz(i,k) / GV%Rho0
+        ! add to total Kd in layer
+        Kd_lay(i,k) = Kd_lay(i,k) + min(Kd_Froude_lay(k), Kd_max)
+      enddo
+    endif
+
+    if (CS%apply_wave_drag) then
+      call get_lowmode_loss(i, j, G, CS, "WaveDrag", TKE_loss)
+      ! insert logic to switch between profiles here
+      ! if trim(CS%wave_profile) == "StLaurent" then
+      profile_itidal(:) = profile_StLaurent(:)
+      ! elseif trim(CS%Froude_profile) == "N2" then
+      ! profile_itidal(:) = profile_N2(:)
+      ! something else
+      ! endif
+      do k=1,nz
+        ! layer diffusivity for processus
+        Kd_itidal_lay(k) = TKE_loss * TKE_to_Kd(i,k) * profile_itidal(k) * dz(i,k) / GV%Rho0
+        ! add to total Kd in layer
+        Kd_lay(i,k) = Kd_lay(i,k) + min(Kd_itidal_lay(k), Kd_max)
+      enddo
+    endif
+
+    if (CS%apply_residual_drag) then
+      call get_lowmode_loss(i, j, G, CS, "SlopeDrag", TKE_loss)
+      ! insert logic to switch between profiles here
+      ! if trim(CS%wave_profile) == "StLaurent" then
+      profile_slope(:) = profile_StLaurent_slope(:)
+      ! elseif trim(CS%Froude_profile) == "N2" then
+      ! profile_itidal(:) = profile_N2(:)
+      ! something else
+      ! endif
+      do k=1,nz
+        ! layer diffusivity for processus
+        Kd_slope_lay(k) = TKE_loss * TKE_to_Kd(i,k) * profile_slope(k) * dz(i,k) / GV%Rho0
+        ! add to total Kd in layer
+        Kd_lay(i,k) = Kd_lay(i,k) + min(Kd_slope_lay(k), Kd_max)
+      enddo
+    endif
+
+    if (CS%apply_bottom_drag) then
+      call get_lowmode_loss(i, j, G, CS, "QuadDrag", TKE_loss)
+      ! insert logic to switch between profiles here
+      ! if trim(CS%bottom_profile) == "BBL" then
+      profile_quad(:) = profile_BBL(:)
+      ! elseif trim(CS%bottom_profile) == "N2" then
+      ! profile_quad(:) = profile_N2(:)
+      ! something else
+      ! endif
+      do k=1,nz
+        ! layer diffusivity for processus
+        Kd_quad_lay(k) = TKE_loss * TKE_to_Kd(i,k) * profile_quad(k) * dz(i,k) / GV%Rho0
+        ! add to total Kd in layer
+        Kd_lay(i,k) = Kd_lay(i,k) + min(Kd_quad_lay(k), Kd_max)
       enddo
     endif
 
@@ -1257,51 +1402,44 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, dz, j, N2_lay, N2_int, TKE_to_K
         ! add to Kd_int
         Kd_int(i,K) = Kd_int(i,K) + min(Kd_leak(i,K), Kd_max)
       enddo
-
     endif
 
+    if (CS%apply_wave_drag) then
+      do k=1,nz+1
+        if (k>1)    Kd_itidal(i,K) = 0.5*Kd_itidal_lay(k-1)
+        if (k<nz+1) Kd_itidal(i,K) = Kd_itidal(i,K) + 0.5*Kd_itidal_lay(k)
+        ! add to Kd_int
+        Kd_int(i,K) = Kd_int(i,K) + min(Kd_itidal(i,K), Kd_max)
+      enddo
+    endif
+
+    if (CS%apply_Froude_drag) then
+      do k=1,nz+1
+        if (k>1)    Kd_Froude(i,K) = 0.5*Kd_Froude_lay(k-1)
+        if (k<nz+1) Kd_Froude(i,K) = Kd_Froude(i,K) + 0.5*Kd_Froude_lay(k)
+        ! add to Kd_int
+        Kd_int(i,K) = Kd_int(i,K) + min(Kd_Froude(i,K), Kd_max)
+      enddo
+    endif
+
+    if (CS%apply_residual_drag) then
+      do k=1,nz+1
+        if (k>1)    Kd_slope(i,K) = 0.5*Kd_slope_lay(k-1)
+        if (k<nz+1) Kd_slope(i,K) = Kd_slope(i,K) + 0.5*Kd_slope_lay(k)
+        ! add to Kd_int
+        Kd_int(i,K) = Kd_int(i,K) + min(Kd_slope(i,K), Kd_max)
+      enddo
+    endif
+
+    if (CS%apply_bottom_drag) then
+      do k=1,nz+1
+        if (k>1)    Kd_quad(i,K) = 0.5*Kd_quad_lay(k-1)
+        if (k<nz+1) Kd_quad(i,K) = Kd_quad(i,K) + 0.5*Kd_quad_lay(k)
+        ! add to Kd_int
+        Kd_int(i,K) = Kd_int(i,K) + min(Kd_quad(i,K), Kd_max)
+      enddo
+    endif
   enddo ! i-loop
-
-
-!      ! wave-wave (leakage) interactions
-!      do i=is,ie
-!        ! get value of TKE loss
-!        call get_lowmode_loss(i, j, G, CS%int_tide_CSp, "LeakDrag", inttide_TKE_loss)
-!        ! sum over column to renormalize profile
-!        renorm_N2 = 0.
-!        do k=1,nz
-!          renorm_N2 = renorm_N2 + (N2_lay(i,k) * dz(i,k))
-!        enddo
-!        ! compute the vertical profile and loss term
-!        do K=1,nz+1
-!          profile_N2(K) = N2_int(i,K) / renorm_N2
-!          ! diagnostic
-!          Kd_leak(i,K) = TKE_to_Kd(i,K) * inttide_TKE_loss * profile_N2(K)
-!          ! add to Kd
-!          Kd_lay_2d(i,K) = Kd_lay_2d(i,K) + TKE_to_Kd(i,K) * inttide_TKE_loss * profile_N2(K)
-!        enddo
-!
-!      enddo
-!
-!      if (CS%id_Kd_leak > 0) then ; do K=1,nz+1 ; do i=is,ie
-!        dd%Kd_leak(i,j,K) = Kd_leak(i,K)
-!      enddo ; enddo ; endif
-!
-!      ! Bottom (quadratic) drag
-!      do i=is,ie
-!        call get_lowmode_loss(i, j, G, CS%int_tide_CSp, "QuadDrag", inttide_TKE_loss)
-!      enddo
-!
-!      ! wave (itidal) drag
-!      do i=is,ie
-!        call get_lowmode_loss(i, j, G, CS%int_tide_CSp, "WaveDrag", inttide_TKE_loss)
-!      enddo
-!
-!      ! Froude drag
-!      do i=is,ie
-!        call get_lowmode_loss(i, j, G, CS%int_tide_CSp, "Froude", inttide_TKE_loss)
-!      enddo
-
 
 end subroutine get_lowmode_diffusivity
 
@@ -3016,7 +3154,14 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   call get_param(param_file, mdl, "GAMMA_OSBORN", CS%gamma_osborn, &
                "The mixing efficiency for internan tides from Osborn 1980 ", &
                units="nondim", default=0.2)
-
+  call get_param(param_file, mdl, "INT_TIDE_DECAY_SCALE", CS%Int_tide_decay_scale, &
+                 "The decay scale away from the bottom for tidal TKE with "//&
+                 "the new coding when INT_TIDE_DISSIPATION is used.", &
+                 units="m", default=500.0, scale=US%m_to_Z)
+  call get_param(param_file, mdl, "INT_TIDE_DECAY_SCALE_SLOPES", CS%Int_tide_decay_scale_slope, &
+                 "The slope decay scale away from the bottom for tidal TKE with "//&
+                 "the new coding when INT_TIDE_DISSIPATION is used.", &
+                 units="m", default=100.0, scale=US%m_to_Z)
 
   ! Allocate various arrays needed for loss rates
   allocate(h2(isd:ied,jsd:jed), source=0.0)

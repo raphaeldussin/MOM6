@@ -544,7 +544,7 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
     if (CS%use_int_tides) then
 
       call thickness_to_dz(h, tv, dz, j, G, GV)
-      call get_lowmode_diffusivity(G, GV, h, tv, dz, j, N2_lay, N2_int, TKE_to_Kd, CS%Kd_max, CS%int_tide_CSp, &
+      call get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TKE_to_Kd, CS%Kd_max, CS%int_tide_CSp, &
                                    Kd_leak_2d, Kd_quad_2d, Kd_itidal_2d, Kd_Froude_2d, Kd_slope_2d, &
                                    Kd_lay_2d, Kd_int_2d)
 
@@ -717,6 +717,10 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
   if (CS%id_Kv_bkgnd > 0) call post_data(CS%id_Kv_bkgnd, dd%Kv_bkgnd, CS%diag)
 
   if (CS%id_Kd_leak > 0) call post_data(CS%id_Kd_leak, dd%Kd_leak, CS%diag)
+  if (CS%id_Kd_slope > 0) call post_data(CS%id_Kd_slope, dd%Kd_slope, CS%diag)
+  if (CS%id_Kd_Froude > 0) call post_data(CS%id_Kd_Froude, dd%Kd_Froude, CS%diag)
+  if (CS%id_Kd_quad > 0) call post_data(CS%id_Kd_quad, dd%Kd_quad, CS%diag)
+  if (CS%id_Kd_itidal > 0) call post_data(CS%id_Kd_itidal, dd%Kd_itidal, CS%diag)
 
   ! tidal mixing
   if (CS%use_tidal_mixing) &
@@ -2422,6 +2426,14 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
 
   CS%id_Kd_leak = register_diag_field('ocean_model', 'Kd_leak', diag%axesTi, Time, &
       'internal tides leakage viscosity added by MOM_internal tides module', 'm2/s', conversion=GV%HZ_T_to_m2_s)
+  CS%id_Kd_Froude = register_diag_field('ocean_model', 'Kd_Froude', diag%axesTi, Time, &
+      'internal tides Froude viscosity added by MOM_internal tides module', 'm2/s', conversion=GV%HZ_T_to_m2_s)
+  CS%id_Kd_itidal = register_diag_field('ocean_model', 'Kd_itidal', diag%axesTi, Time, &
+      'internal tides wave drag viscosity added by MOM_internal tides module', 'm2/s', conversion=GV%HZ_T_to_m2_s)
+  CS%id_Kd_quad = register_diag_field('ocean_model', 'Kd_quad', diag%axesTi, Time, &
+      'internal tides bottom viscosity added by MOM_internal tides module', 'm2/s', conversion=GV%HZ_T_to_m2_s)
+  CS%id_Kd_slope = register_diag_field('ocean_model', 'Kd_slope', diag%axesTi, Time, &
+      'internal tides slope viscosity added by MOM_internal tides module', 'm2/s', conversion=GV%HZ_T_to_m2_s)
 
 
   CS%id_Kd_layer = register_diag_field('ocean_model', 'Kd_layer', diag%axesTL, Time, &
