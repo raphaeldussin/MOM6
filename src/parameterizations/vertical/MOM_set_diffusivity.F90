@@ -175,6 +175,8 @@ type, public :: set_diffusivity_CS ; private
   integer :: id_Kd_Work    = -1, id_KT_extra    = -1, id_KS_extra   = -1, id_R_rho    = -1
   integer :: id_Kd_bkgnd   = -1, id_Kv_bkgnd    = -1, id_Kd_leak    = -1
   integer :: id_Kd_quad    = -1, id_Kd_itidal   = -1, id_Kd_Froude  = -1, id_Kd_slope = -1
+  integer :: id_prof_leak  = -1, id_prof_quad   = -1, id_prof_itidal= -1
+  integer :: id_prof_Froude= -1, id_prof_slope  = -1
   !>@}
 
 end type set_diffusivity_CS
@@ -196,7 +198,12 @@ type diffusivity_diags
     Kd_quad   => NULL(), &
     Kd_itidal => NULL(), &
     Kd_Froude => NULL(), &
-    Kd_slope  => NULL()
+    Kd_slope  => NULL(), &
+    prof_leak   => NULL(), &
+    prof_quad   => NULL(), &
+    prof_itidal => NULL(), &
+    prof_Froude => NULL(), &
+    prof_slope  => NULL()
   real, pointer, dimension(:,:,:) :: TKE_to_Kd => NULL()
                           !< conversion rate (~1.0 / (G_Earth + dRho_lay)) between TKE
                           !! dissipated within a layer and Kd in that layer
@@ -267,6 +274,11 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
     Kd_lay_2d, &  !< The layer diffusivities [H Z T-1 ~> m2 s-1 or kg m-1 s-1]
     dz, &         !< Height change across layers [Z ~> m]
     maxTKE, &     !< Energy required to entrain to h_max [H Z2 T-3 ~> m3 s-3 or W m-2]
+    prof_leak_2d,&
+    prof_quad_2d,&
+    prof_itidal_2d,&
+    prof_Froude_2d,&
+    prof_slope_2d,&
     TKE_to_Kd     !< Conversion rate (~1.0 / (G_Earth + dRho_lay)) between
                   !< TKE dissipated within a layer and Kd in that layer
                   !< [H Z T-1 / H Z2 T-3 = T2 Z-1 ~> s2 m-1]
@@ -361,6 +373,11 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
   if (CS%id_Kd_Froude > 0) allocate(dd%Kd_Froude(isd:ied,jsd:jed,nz+1), source=0.)
   if (CS%id_Kd_slope > 0) allocate(dd%Kd_slope(isd:ied,jsd:jed,nz+1), source=0.)
 
+  if (CS%id_prof_leak > 0) allocate(dd%prof_leak(isd:ied,jsd:jed,nz), source=0.)
+  if (CS%id_prof_quad > 0) allocate(dd%prof_quad(isd:ied,jsd:jed,nz), source=0.)
+  if (CS%id_prof_itidal > 0) allocate(dd%prof_itidal(isd:ied,jsd:jed,nz), source=0.)
+  if (CS%id_prof_Froude > 0) allocate(dd%prof_Froude(isd:ied,jsd:jed,nz), source=0.)
+  if (CS%id_prof_slope > 0) allocate(dd%prof_slope(isd:ied,jsd:jed,nz), source=0.)
 
   ! set up arrays for tidal mixing diagnostics
   if (CS%use_tidal_mixing) &
@@ -546,7 +563,8 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
       call thickness_to_dz(h, tv, dz, j, G, GV)
       call get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TKE_to_Kd, CS%Kd_max, CS%int_tide_CSp, &
                                    Kd_leak_2d, Kd_quad_2d, Kd_itidal_2d, Kd_Froude_2d, Kd_slope_2d, &
-                                   Kd_lay_2d, Kd_int_2d)
+                                   Kd_lay_2d, Kd_int_2d, prof_leak_2d, prof_quad_2d, prof_itidal_2d, prof_froude_2d, &
+                                   prof_slope_2d)
 
       if (CS%id_Kd_leak > 0) then ; do K=1,nz+1 ; do i=is,ie
         dd%Kd_leak(i,j,K) = Kd_leak_2d(i,K)
@@ -562,6 +580,22 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
       enddo ; enddo ; endif
       if (CS%id_Kd_slope > 0) then ; do K=1,nz+1 ; do i=is,ie
         dd%Kd_slope(i,j,K) = Kd_slope_2d(i,K)
+      enddo ; enddo ; endif
+
+      if (CS%id_prof_leak > 0) then ; do k=1,nz; do i=is,ie
+        dd%prof_leak(i,j,k) = prof_leak_2d(i,k)
+      enddo ; enddo ; endif
+      if (CS%id_prof_quad > 0) then ; do k=1,nz; do i=is,ie
+        dd%prof_quad(i,j,k) = prof_quad_2d(i,k)
+      enddo ; enddo ; endif
+      if (CS%id_prof_itidal > 0) then ; do k=1,nz; do i=is,ie
+        dd%prof_itidal(i,j,k) = prof_itidal_2d(i,k)
+      enddo ; enddo ; endif
+      if (CS%id_prof_Froude > 0) then ; do k=1,nz; do i=is,ie
+        dd%prof_Froude(i,j,k) = prof_Froude_2d(i,k)
+      enddo ; enddo ; endif
+      if (CS%id_prof_slope > 0) then ; do k=1,nz; do i=is,ie
+        dd%prof_slope(i,j,k) = prof_slope_2d(i,k)
       enddo ; enddo ; endif
 
 
@@ -721,6 +755,12 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
   if (CS%id_Kd_Froude > 0) call post_data(CS%id_Kd_Froude, dd%Kd_Froude, CS%diag)
   if (CS%id_Kd_quad > 0) call post_data(CS%id_Kd_quad, dd%Kd_quad, CS%diag)
   if (CS%id_Kd_itidal > 0) call post_data(CS%id_Kd_itidal, dd%Kd_itidal, CS%diag)
+
+  if (CS%id_prof_leak > 0) call post_data(CS%id_prof_leak, dd%prof_leak, CS%diag)
+  if (CS%id_prof_slope > 0) call post_data(CS%id_prof_slope, dd%prof_slope, CS%diag)
+  if (CS%id_prof_Froude > 0) call post_data(CS%id_prof_Froude, dd%prof_Froude, CS%diag)
+  if (CS%id_prof_quad > 0) call post_data(CS%id_prof_quad, dd%prof_quad, CS%diag)
+  if (CS%id_prof_itidal > 0) call post_data(CS%id_prof_itidal, dd%prof_itidal, CS%diag)
 
   ! tidal mixing
   if (CS%use_tidal_mixing) &
@@ -2435,6 +2475,16 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
   CS%id_Kd_slope = register_diag_field('ocean_model', 'Kd_slope', diag%axesTi, Time, &
       'internal tides slope viscosity added by MOM_internal tides module', 'm2/s', conversion=GV%HZ_T_to_m2_s)
 
+  CS%id_prof_leak = register_diag_field('ocean_model', 'prof_leak', diag%axesTl, Time, &
+      'internal tides leakage profile added by MOM_internal tides module', 'm-1', conversion=US%m_to_L)
+  CS%id_prof_Froude = register_diag_field('ocean_model', 'prof_Froude', diag%axesTl, Time, &
+      'internal tides Froude profile added by MOM_internal tides module', 'm-1', conversion=US%m_to_L)
+  CS%id_prof_itidal = register_diag_field('ocean_model', 'prof_itidal', diag%axesTl, Time, &
+      'internal tides wave drag profile added by MOM_internal tides module', 'm-1', conversion=US%m_to_L)
+  CS%id_prof_quad = register_diag_field('ocean_model', 'prof_quad', diag%axesTl, Time, &
+      'internal tides bottom profile added by MOM_internal tides module', 'm-1', conversion=US%m_to_L)
+  CS%id_prof_slope = register_diag_field('ocean_model', 'prof_slope', diag%axesTl, Time, &
+      'internal tides slope profile added by MOM_internal tides module', 'm-1', conversion=US%m_to_L)
 
   CS%id_Kd_layer = register_diag_field('ocean_model', 'Kd_layer', diag%axesTL, Time, &
       'Diapycnal diffusivity of layers (as set)', 'm2 s-1', conversion=GV%HZ_T_to_m2_s)
