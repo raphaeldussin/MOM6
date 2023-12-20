@@ -60,6 +60,7 @@ type, public :: int_tide_CS ; private
                              !! areas when estimating CFL numbers.  Without aggress_adjust,
                              !! the default is false; it is always true with aggress_adjust.
   logical :: use_PPMang      !< If true, use PPM for advection of energy in angular space.
+  logical :: update_Kd       !< If true, the scheme will modify the diffusivities seen by the dynamics
 
   real, allocatable, dimension(:,:) :: fraction_tidal_input
                         !< how the energy from one tidal component is distributed
@@ -151,7 +152,10 @@ type, public :: int_tide_CS ; private
                         !! of the quadratic drag terms for internal tides when
                         !! INTERNAL_TIDE_QUAD_DRAG is true [H ~> m or kg m-2]
   real :: kappa_fill    !< a Timescale for the filling of massless layers
-  real :: gamma_osborn  !< Mixing efficiency from Osborn 1980
+  real :: gamma_osborn  !< Mixing efficiency from Osborn 1980 [nondim]
+  real :: Kd_min        !< The minimum diapycnal diffusivity. [L2 T-1 ~> m2 s-1]
+  real :: max_TKE_to_Kd !< Maximum allowed value for TKE_to_kd
+  real :: min_depth_layer_Kd !< minimum depth allowed to use with TKE_to_kd
   logical :: apply_background_drag
                         !< If true, apply a drag due to background processes as a sink.
   logical :: apply_bottom_drag
@@ -1207,6 +1211,7 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TK
   real :: hbbl              ! thickness of BBL at h-point [Z ~> m]
   real :: hbbl_full         ! thickness of BBL at h-point from layers fully included in BBL [Z ~> m]
   real :: dzrem             ! remaining thickness in BBL to layer number computation [Z ~> m]
+  real :: TKE_to_Kd_lim     ! limited version of TKE_to_Kd
 
   ! vertical profiles have units Z-1 for conversion to Kd to be dim correct (see eq 2 of St Laurent GRL 2002)
   real, dimension(SZK_(GV)) :: profile_N  ! vertical profile varying with N [Z-1 ~> m-1]
@@ -1418,9 +1423,14 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TK
       ! endif
       do k=1,nz
         ! layer diffusivity for processus
-        Kd_leak_lay(k) = TKE_loss * TKE_to_Kd(i,k) * profile_leak(i,k) * dz(i,k) / GV%Rho0
+        if (dz(i,k) >= CS%min_depth_layer_Kd) then
+          TKE_to_Kd_lim = min(TKE_to_Kd(i,k), CS%max_TKE_to_Kd)
+          Kd_leak_lay(k) = TKE_loss * TKE_to_Kd_lim * profile_leak(i,k) * dz(i,k) / GV%Rho0
+        else
+          Kd_leak_lay(k) = CS%Kd_min
+        endif
         ! add to total Kd in layer
-        Kd_lay(i,k) = Kd_lay(i,k) + min(Kd_leak_lay(k), Kd_max)
+        if (CS%update_Kd) Kd_lay(i,k) = Kd_lay(i,k) + min(Kd_leak_lay(k), Kd_max)
       enddo
     endif
 
@@ -1435,9 +1445,14 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TK
       ! endif
       do k=1,nz
         ! layer diffusivity for processus
-        Kd_Froude_lay(k) = TKE_loss * TKE_to_Kd(i,k) * profile_Froude(i,k) * dz(i,k) / GV%Rho0
+        if (dz(i,k) >= CS%min_depth_layer_Kd) then
+          TKE_to_Kd_lim = min(TKE_to_Kd(i,k), CS%max_TKE_to_Kd)
+          Kd_Froude_lay(k) = TKE_loss * TKE_to_Kd_lim * profile_Froude(i,k) * dz(i,k) / GV%Rho0
+        else
+          Kd_leak_lay(k) = CS%Kd_min
+        endif
         ! add to total Kd in layer
-        Kd_lay(i,k) = Kd_lay(i,k) + min(Kd_Froude_lay(k), Kd_max)
+        if (CS%update_Kd) Kd_lay(i,k) = Kd_lay(i,k) + min(Kd_Froude_lay(k), Kd_max)
       enddo
     endif
 
@@ -1452,9 +1467,14 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TK
       ! endif
       do k=1,nz
         ! layer diffusivity for processus
-        Kd_itidal_lay(k) = TKE_loss * TKE_to_Kd(i,k) * profile_itidal(i,k) * dz(i,k) / GV%Rho0
+        if (dz(i,k) >= CS%min_depth_layer_Kd) then
+          TKE_to_Kd_lim = min(TKE_to_Kd(i,k), CS%max_TKE_to_Kd)
+          Kd_itidal_lay(k) = TKE_loss * TKE_to_Kd_lim * profile_itidal(i,k) * dz(i,k) / GV%Rho0
+        else
+          Kd_itidal_lay(k) = CS%Kd_min
+        endif
         ! add to total Kd in layer
-        Kd_lay(i,k) = Kd_lay(i,k) + min(Kd_itidal_lay(k), Kd_max)
+        if (CS%update_Kd) Kd_lay(i,k) = Kd_lay(i,k) + min(Kd_itidal_lay(k), Kd_max)
       enddo
     endif
 
@@ -1469,9 +1489,14 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TK
       ! endif
       do k=1,nz
         ! layer diffusivity for processus
-        Kd_slope_lay(k) = TKE_loss * TKE_to_Kd(i,k) * profile_slope(i,k) * dz(i,k) / GV%Rho0
+        if (dz(i,k) >= CS%min_depth_layer_Kd) then
+          TKE_to_Kd_lim = min(TKE_to_Kd(i,k), CS%max_TKE_to_Kd)
+          Kd_slope_lay(k) = TKE_loss * TKE_to_Kd_lim * profile_slope(i,k) * dz(i,k) / GV%Rho0
+        else
+          Kd_slope_lay(k) = CS%Kd_min
+        endif
         ! add to total Kd in layer
-        Kd_lay(i,k) = Kd_lay(i,k) + min(Kd_slope_lay(k), Kd_max)
+        if (CS%update_Kd) Kd_lay(i,k) = Kd_lay(i,k) + min(Kd_slope_lay(k), Kd_max)
       enddo
     endif
 
@@ -1486,9 +1511,14 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TK
       ! endif
       do k=1,nz
         ! layer diffusivity for processus
-        Kd_quad_lay(k) = TKE_loss * TKE_to_Kd(i,k) * profile_quad(i,k) * dz(i,k) / GV%Rho0
+        if (dz(i,k) >= CS%min_depth_layer_Kd) then
+          TKE_to_Kd_lim = min(TKE_to_Kd(i,k), CS%max_TKE_to_Kd)
+          Kd_quad_lay(k) = TKE_loss * TKE_to_Kd_lim * profile_quad(i,k) * dz(i,k) / GV%Rho0
+        else
+          Kd_quad_lay(k) = CS%Kd_min
+        endif
         ! add to total Kd in layer
-        Kd_lay(i,k) = Kd_lay(i,k) + min(Kd_quad_lay(k), Kd_max)
+        if (CS%update_Kd) Kd_lay(i,k) = Kd_lay(i,k) + min(Kd_quad_lay(k), Kd_max)
       enddo
     endif
 
@@ -1498,7 +1528,7 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TK
         if (k>1)    Kd_leak(i,K) = 0.5*Kd_leak_lay(k-1)
         if (k<nz+1) Kd_leak(i,K) = Kd_leak(i,K) + 0.5*Kd_leak_lay(k)
         ! add to Kd_int
-        Kd_int(i,K) = Kd_int(i,K) + min(Kd_leak(i,K), Kd_max)
+        if (CS%update_Kd) Kd_int(i,K) = Kd_int(i,K) + min(Kd_leak(i,K), Kd_max)
       enddo
     endif
 
@@ -1507,7 +1537,7 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TK
         if (k>1)    Kd_itidal(i,K) = 0.5*Kd_itidal_lay(k-1)
         if (k<nz+1) Kd_itidal(i,K) = Kd_itidal(i,K) + 0.5*Kd_itidal_lay(k)
         ! add to Kd_int
-        Kd_int(i,K) = Kd_int(i,K) + min(Kd_itidal(i,K), Kd_max)
+        if (CS%update_Kd) Kd_int(i,K) = Kd_int(i,K) + min(Kd_itidal(i,K), Kd_max)
       enddo
     endif
 
@@ -1516,7 +1546,7 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TK
         if (k>1)    Kd_Froude(i,K) = 0.5*Kd_Froude_lay(k-1)
         if (k<nz+1) Kd_Froude(i,K) = Kd_Froude(i,K) + 0.5*Kd_Froude_lay(k)
         ! add to Kd_int
-        Kd_int(i,K) = Kd_int(i,K) + min(Kd_Froude(i,K), Kd_max)
+        if (CS%update_Kd) Kd_int(i,K) = Kd_int(i,K) + min(Kd_Froude(i,K), Kd_max)
       enddo
     endif
 
@@ -1525,7 +1555,7 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TK
         if (k>1)    Kd_slope(i,K) = 0.5*Kd_slope_lay(k-1)
         if (k<nz+1) Kd_slope(i,K) = Kd_slope(i,K) + 0.5*Kd_slope_lay(k)
         ! add to Kd_int
-        Kd_int(i,K) = Kd_int(i,K) + min(Kd_slope(i,K), Kd_max)
+        if (CS%update_Kd) Kd_int(i,K) = Kd_int(i,K) + min(Kd_slope(i,K), Kd_max)
       enddo
     endif
 
@@ -1534,7 +1564,7 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TK
         if (k>1)    Kd_quad(i,K) = 0.5*Kd_quad_lay(k-1)
         if (k<nz+1) Kd_quad(i,K) = Kd_quad(i,K) + 0.5*Kd_quad_lay(k)
         ! add to Kd_int
-        Kd_int(i,K) = Kd_int(i,K) + min(Kd_quad(i,K), Kd_max)
+        if (CS%update_Kd) Kd_int(i,K) = Kd_int(i,K) + min(Kd_quad(i,K), Kd_max)
       enddo
     endif
   enddo ! i-loop
@@ -3165,6 +3195,18 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
 
   CS%diag => diag
 
+  call get_param(param_file, mdl, "INTERNAL_TIDES_UPDATE_KD", CS%update_Kd, &
+                 "If true, internal tides ray tracing changes Kd for dynamics.", &
+                 default=.false.)
+  call get_param(param_file, mdl, "KD_MIN", CS%Kd_min, &
+                 "The minimum diapycnal diffusivity.", &
+                 units="m2 s-1", default=2e-6, scale=GV%m2_s_to_HZ_T)
+  call get_param(param_file, mdl, "MINDEPTH_TKE_TO_KD", CS%min_depth_layer_Kd, &
+                 "The minimum depth allowed with TKE_to_Kd.", &
+                 units="m", default=1e-6*US%m_to_L, scale=US%m_to_L)
+  call get_param(param_file, mdl, "MAX_TKE_TO_KD", CS%max_TKE_to_Kd, &
+                 "Limiter for TKE_to_Kd.", &
+                 units="", default=1e9, scale=US%m_to_L)
   call get_param(param_file, mdl, "INTERNAL_TIDE_DECAY_RATE", CS%decay_rate, &
                  "The rate at which internal tide energy is lost to the "//&
                  "interior ocean internal wave field.", &

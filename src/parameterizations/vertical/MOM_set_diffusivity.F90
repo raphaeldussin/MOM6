@@ -341,6 +341,7 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
                           "when USE_CVMIX_DDIFF or DOUBLE_DIFFUSION are true.")
 
   TKE_to_Kd_used = (CS%use_tidal_mixing .or. CS%ML_radiation .or. &
+                    CS%use_int_tides .or. &
                    (CS%bottomdraglaw .and. .not.CS%use_LOTW_BBL_diffusivity))
 
   ! Set Kd_lay, Kd_int and Kv_slow to constant values, mostly to fill the halos.
