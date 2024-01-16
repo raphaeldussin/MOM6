@@ -1172,22 +1172,14 @@ subroutine get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TK
                                                              !! Set this to a negative value to have no limit.
                                                              !! [H Z T-1 ~> m2 s-1 or kg m-1 s-1].
   type(int_tide_cs),                 intent(in)    :: CS     !< The control structure for this module
-  real, dimension(SZI_(G),SZK_(GV)+1), & 
-                           optional, intent(out) :: Kd_leak
-  real, dimension(SZI_(G),SZK_(GV)+1), & 
-                           optional, intent(out) :: Kd_quad
-  real, dimension(SZI_(G),SZK_(GV)+1), & 
-                           optional, intent(out) :: Kd_itidal
-  real, dimension(SZI_(G),SZK_(GV)+1), & 
-                           optional, intent(out) :: Kd_Froude
-  real, dimension(SZI_(G),SZK_(GV)+1), & 
-                           optional, intent(out) :: Kd_slope
-
-  real, dimension(SZI_(G),SZK_(GV)), &
-                           optional, intent(inout) :: Kd_lay !< The diapycnal diffusivity in layers
-  real, dimension(SZI_(G),SZK_(GV)+1), & 
-                           optional, intent(inout) :: Kd_int !< The diapycnal diffusivity at interfaces
-                                                             !! [H Z T-1 ~> m2 s-1 or kg m-1 s-1].
+  real, dimension(SZI_(G),SZK_(GV)+1), intent(out) :: Kd_leak
+  real, dimension(SZI_(G),SZK_(GV)+1), intent(out) :: Kd_quad
+  real, dimension(SZI_(G),SZK_(GV)+1), intent(out) :: Kd_itidal
+  real, dimension(SZI_(G),SZK_(GV)+1), intent(out) :: Kd_Froude
+  real, dimension(SZI_(G),SZK_(GV)+1), intent(out) :: Kd_slope
+  real, dimension(SZI_(G),SZK_(GV)),   intent(inout) :: Kd_lay !< The diapycnal diffusivity in layers
+  real, dimension(SZI_(G),SZK_(GV)+1), intent(inout) :: Kd_int !< The diapycnal diffusivity at interfaces
+                                                               !! [H Z T-1 ~> m2 s-1 or kg m-1 s-1].
   real, dimension(SZI_(G), SZK_(GV)), intent(out) :: profile_leak
   real, dimension(SZI_(G), SZK_(GV)), intent(out) :: profile_quad
   real, dimension(SZI_(G), SZK_(GV)), intent(out) :: profile_itidal

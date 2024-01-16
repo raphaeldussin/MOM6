@@ -797,6 +797,17 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
   if (associated(dd%Kd_bkgnd)) deallocate(dd%Kd_bkgnd)
   if (associated(dd%Kv_bkgnd)) deallocate(dd%Kv_bkgnd)
 
+  if (associated(dd%Kd_leak)) deallocate(dd%Kd_leak)
+  if (associated(dd%Kd_quad)) deallocate(dd%Kd_quad)
+  if (associated(dd%Kd_itidal)) deallocate(dd%Kd_itidal)
+  if (associated(dd%Kd_Froude)) deallocate(dd%Kd_Froude)
+  if (associated(dd%Kd_slope)) deallocate(dd%Kd_slope)
+  if (associated(dd%prof_leak)) deallocate(dd%prof_leak)
+  if (associated(dd%prof_quad)) deallocate(dd%prof_quad)
+  if (associated(dd%prof_itidal)) deallocate(dd%prof_itidal)
+  if (associated(dd%prof_Froude)) deallocate(dd%prof_Froude)
+  if (associated(dd%prof_slope)) deallocate(dd%prof_slope)
+
   if (showCallTree) call callTree_leave("set_diffusivity()")
 
 end subroutine set_diffusivity
