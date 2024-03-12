@@ -52,7 +52,7 @@ type, public :: int_tide_input_CS
             !! stratification and perhaps density are time-varying [R Z4 H-1 T-2 ~> J m-2 or J m kg-1].
   real, allocatable, dimension(:,:,:) :: &
     TKE_itidal_input, & !< The internal tide TKE input at the bottom of the ocean [R Z3 T-3 ~> W m-2].
-    tideamp             !< The amplitude of the tidal velocities [Z T-1 ~> m s-1].
+    tideamp             !< The amplitude of the tidal velocities [L T-1 ~> m s-1].
 
   character(len=200) :: inputdir !< The directory for input files.
 
@@ -359,6 +359,8 @@ subroutine get_barotropic_tidal_vel(G, vel_btTide, nFreq, CS)
   do fr=1,nFreq ; do j=G%jsd,G%jed ; do i=G%isd,G%ied
     vel_btTide(i,j,fr) = CS%tideamp(i,j,fr)
   enddo ; enddo ; enddo
+
+  !call hchksum(vel_btTide(:,:,1),"vel_btTide_input",G%HI,haloshift=0, scale=US%L_T_to_m_s)
 
 end subroutine get_barotropic_tidal_vel
 

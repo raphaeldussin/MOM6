@@ -562,8 +562,11 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
     if (CS%use_int_tides) then
 
       call thickness_to_dz(h, tv, dz, j, G, GV)
-      call get_lowmode_diffusivity(G, GV, h, tv, visc, dz, j, N2_lay, N2_int, TKE_to_Kd, CS%Kd_max, CS%int_tide_CSp, &
-                                   Kd_leak_2d, Kd_quad_2d, Kd_itidal_2d, Kd_Froude_2d, Kd_slope_2d, &
+
+      !call hchksum(dz, "dz_before_diff", G%HI, haloshift=0, scale=US%Z_to_m)
+
+      call get_lowmode_diffusivity(G, GV, h, tv, US, visc, dz, j, N2_lay, N2_int, TKE_to_Kd, CS%Kd_max, &
+                                   CS%int_tide_CSp, Kd_leak_2d, Kd_quad_2d, Kd_itidal_2d, Kd_Froude_2d, Kd_slope_2d, &
                                    Kd_lay_2d, Kd_int_2d, prof_leak_2d, prof_quad_2d, prof_itidal_2d, prof_froude_2d, &
                                    prof_slope_2d)
 
@@ -743,6 +746,19 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
     endif
 
   endif
+
+  call hchksum(dd%prof_leak, "leakage_profile", G%HI, haloshift=0, scale=US%m_to_Z)
+  call hchksum(dd%prof_slope, "slope_profile", G%HI, haloshift=0, scale=US%m_to_Z)
+  call hchksum(dd%prof_Froude, "Froude_profile", G%HI, haloshift=0, scale=US%m_to_Z)
+  call hchksum(dd%prof_quad, "quad_profile", G%HI, haloshift=0, scale=US%m_to_Z)
+  call hchksum(dd%prof_itidal, "itidal_profile", G%HI, haloshift=0, scale=US%m_to_Z)
+  call hchksum(dd%TKE_to_Kd, "TKE_to_Kd", G%HI, haloshift=0, scale=US%m_to_Z*US%T_to_s**2) !  T2 Z-1
+  !call hchksum(dd%Kd_leak, "Kd_leak", G%HI, haloshift=0, scale=US%RZ3_T3_to_W_m2) ! GV%HZ_T_to_m2_s
+  call hchksum(dd%Kd_leak,   "Kd_leak",   G%HI, haloshift=0, scale=GV%HZ_T_to_m2_s) ! GV%HZ_T_to_m2_s
+  call hchksum(dd%Kd_quad,   "Kd_quad",   G%HI, haloshift=0, scale=GV%HZ_T_to_m2_s) ! HZ_T 
+  call hchksum(dd%Kd_itidal, "Kd_itidal", G%HI, haloshift=0, scale=GV%HZ_T_to_m2_s) ! HZ_T 
+  call hchksum(dd%Kd_Froude, "Kd_Froude", G%HI, haloshift=0, scale=GV%HZ_T_to_m2_s) ! HZ_T 
+  call hchksum(dd%Kd_slope,  "Kd_slope",  G%HI, haloshift=0, scale=GV%HZ_T_to_m2_s) ! HZ_T 
 
   ! post diagnostics
   if (present(Kd_lay) .and. (CS%id_Kd_layer > 0)) call post_data(CS%id_Kd_layer, Kd_lay, CS%diag)
