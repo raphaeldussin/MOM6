@@ -55,6 +55,7 @@ use BFB_surface_forcing,    only : BFB_buoyancy_forcing
 use BFB_surface_forcing,    only : BFB_surface_forcing_init, BFB_surface_forcing_CS
 use dumbbell_surface_forcing,    only : dumbbell_surface_forcing_init, dumbbell_surface_forcing_CS
 use dumbbell_surface_forcing, only    : dumbbell_buoyancy_forcing
+use mod_aerobulk_compute, only: aerobulk_compute
 
 implicit none ; private
 
@@ -104,6 +105,13 @@ type, public :: surface_forcing_CS ; private
 
   integer :: buoy_last_lev_read = -1 !< The last time level read from buoyancy input files
 
+  ! if WIND_CONFIG=='aerobulk'
+  character(len=80) :: bulk_algo
+  character(len=2)  :: humidity_type
+  logical           :: use_skin_schemes
+  real              :: ref_height_wind
+  real              :: ref_height_temp
+  real              :: ref_height_hum
   ! if WIND_CONFIG=='gyres' then use the following as  = A, B, C and n respectively for
   ! taux = A + B*sin(n*pi*y/L) + C*cos(n*pi*y/L)
   real :: gyres_taux_const   !< A constant wind stress [R L Z T-2 ~> Pa].
@@ -279,6 +287,8 @@ subroutine set_forcing(sfc_state, forces, fluxes, day_start, day_interval, G, US
       call wind_forcing_from_file(sfc_state, forces, day_center, G, US, CS)
     elseif (trim(CS%wind_config) == "data_override") then
       call wind_forcing_by_data_override(sfc_state, forces, day_center, G, US, CS)
+    elseif (trim(CS%wind_config) == "aerobulk") then
+      call forcing_by_aerobulk(sfc_state, forces, fluxes, day_center, G, US, CS)
     elseif (trim(CS%wind_config) == "2gyre") then
       call wind_forcing_2gyre(sfc_state, forces, day_center, G, US, CS)
     elseif (trim(CS%wind_config) == "1gyre") then
@@ -324,6 +334,9 @@ subroutine set_forcing(sfc_state, forces, fluxes, day_start, day_interval, G, US
       call buoyancy_forcing_from_files(sfc_state, fluxes, day_center, dt, G, US, CS)
     elseif (trim(CS%buoy_config) == "data_override") then
       call buoyancy_forcing_from_data_override(sfc_state, fluxes, day_center, dt, G, US, CS)
+    elseif (trim(CS%buoy_config) == "aerobulk") then
+      ! nothing to do, fluxes have been set in the wind part
+      call MOM_error(WARNING, "only setting up precip ")
     elseif (trim(CS%buoy_config) == "zero") then
       call buoyancy_forcing_zero(sfc_state, fluxes, day_center, dt, G, CS)
     elseif (trim(CS%buoy_config) == "const") then
@@ -923,6 +936,110 @@ subroutine wind_forcing_by_data_override(sfc_state, forces, day, G, US, CS)
 
   call callTree_leave("wind_forcing_by_data_override")
 end subroutine wind_forcing_by_data_override
+
+! Sets the surface wind stresses via the data override facility.
+subroutine forcing_by_aerobulk(sfc_state, forces, fluxes, day, G, US, CS)
+  type(surface),            intent(inout) :: sfc_state !< A structure containing fields that
+                                                       !! describe the surface state of the ocean.
+  type(mech_forcing),       intent(inout) :: forces !< A structure with the driving mechanical forces
+  type(forcing),            intent(inout) :: fluxes !< A structure containing thermodynamic forcing fields
+  type(time_type),          intent(in)    :: day  !< The time of the fluxes
+  type(ocean_grid_type),    intent(inout) :: G    !< The ocean's grid structure
+  type(unit_scale_type),    intent(in)    :: US   !< A dimensional unit scaling type
+  type(surface_forcing_CS), pointer       :: CS   !< pointer to control structure returned by
+                                                  !! a previous surface_forcing_init call
+  ! Local variables
+  real :: U_zu(SZI_(G),SZJ_(G)) ! Pseudo-zonal wind at h-points [L T-1 ~> m.s-1].
+  real :: V_zu(SZI_(G),SZJ_(G)) ! Pseudo-meridional wind at h-points [L T-1 ~> m.s-1].
+  real :: slp(SZI_(G),SZJ_(G)) ! 
+  real :: t_zt(SZI_(G),SZJ_(G)) ! 
+  real :: hum_zt(SZI_(G),SZJ_(G)) ! 
+  real :: QL(SZI_(G),SZJ_(G)) ! 
+  real :: QH(SZI_(G),SZJ_(G)) ! 
+  real :: Tau_x(SZI_(G),SZJ_(G)) ! 
+  real :: Tau_y(SZI_(G),SZJ_(G)) ! 
+  real :: rad_sw(SZI_(G),SZJ_(G)) ! 
+  real :: rad_lw(SZI_(G),SZJ_(G)) ! 
+  real :: radsw1(SZI_(G),SZJ_(G)) ! 
+  real :: radsw2(SZI_(G),SZJ_(G)) ! 
+  real :: radsw3(SZI_(G),SZJ_(G)) ! 
+  real :: radsw4(SZI_(G),SZJ_(G)) ! 
+  real :: T_s(SZI_(G),SZJ_(G)) ! 
+  real :: Evp(SZI_(G),SZJ_(G)) ! 
+  real :: sst(SZI_(G),SZJ_(G)) ! 
+
+  !real :: ustar_prev(SZI_(G),SZJ_(G)) ! The pre-override value of ustar [Z T-1 ~> m s-1]
+  !real :: ustar_loc(SZI_(G),SZJ_(G)) ! The value of ustar, perhaps altered by data override [Z T-1 ~> m s-1]
+  !real :: tau_mag       ! The magnitude of the wind stress including any contributions from
+                        ! sub-gridscale variability or gustiness [R L Z T-2 ~> Pa]
+  integer :: i, j
+
+  call callTree_enter("forcing_by_aerobulk, MOM_surface_forcing.F90")
+
+  if (.not.CS%dataOverrideIsInitialized) then
+    call allocate_mech_forcing(G, forces, stress=.true., ustar=.not.CS%nonBous, press=.true., tau_mag=CS%nonBous)
+    call data_override_init(G%Domain)
+    CS%dataOverrideIsInitialized = .True.
+  endif
+
+  !temp_x(:,:) = 0.0 ; temp_y(:,:) = 0.0
+  ! CS%wind_scale is ignored here because it is not set in this mode.
+
+  call data_override(G%Domain, 'u_bot', U_zu, day, scale=US%L_T_to_m_s)
+  call data_override(G%Domain, 'v_bot', V_zu, day, scale=US%L_T_to_m_s)
+  call data_override(G%Domain, 'p_bot', slp, day, scale=US%L_T_to_m_s)
+  call data_override(G%Domain, 't_bot', t_zt, day, scale=US%L_T_to_m_s)
+  call data_override(G%Domain, 'sphum_bot', hum_zt, day, scale=US%L_T_to_m_s)
+  call data_override(G%Domain, 'lw_flux_dn', rad_lw, day, scale=US%L_T_to_m_s)
+  call data_override(G%Domain, 'sw_flux_vis_dir_dn', radsw1, day, scale=US%L_T_to_m_s)
+  call data_override(G%Domain, 'sw_flux_vis_dif_dn', radsw2, day, scale=US%L_T_to_m_s)
+  call data_override(G%Domain, 'sw_flux_nir_dir_dn', radsw3, day, scale=US%L_T_to_m_s)
+  call data_override(G%Domain, 'sw_flux_nir_dif_dn', radsw4, day, scale=US%L_T_to_m_s)
+
+  rad_sw(:,:) = radsw1(:,:) + radsw2(:,:) + radsw3(:,:) + radsw4(:,:)
+  sst(:,:) = sfc_state%SST(:,:) + 273.15
+
+  !call aerobulk_compute( jt, calgo, zt, zu, sst, t_zt, &
+  !    &                         hum_zt, U_zu, V_zu, slp,  &
+  !    &                         ctype_humidity, l_use_skin_schemes, &
+  !    &                         QL, QH, Tau_x, Tau_y,     &
+  !    &                         rad_sw, rad_lw, T_s, Evp )
+  call aerobulk_compute(1, CS%bulk_algo, CS%ref_height_wind, CS%ref_height_temp, &
+      &                 sst, t_zt, hum_zt, U_zu, V_zu, slp, CS%humidity_type, &
+      &                 CS%use_skin_schemes, QL, QH, Tau_x, Tau_y, &
+      &                 rad_sw, rad_lw, T_s, Evp )
+
+  call pass_vector(Tau_x, Tau_y, G%Domain, To_All, AGRID)
+
+  do j=G%jsc,G%jec ; do I=G%isc-1,G%IecB
+    forces%taux(I,j) = 0.5 * (Tau_x(i,j) + Tau_x(i+1,j))
+  enddo ; enddo
+  do J=G%jsc-1,G%JecB ; do i=G%isc,G%iec
+    forces%tauy(i,J) = 0.5 * (Tau_y(i,j) + Tau_y(i,j+1))
+  enddo ; enddo
+
+  do j=G%jsc,G%jec ; do i=G%isc,G%iec
+    fluxes%sens(i,j) = QH(i,j) * G%mask2dT(i,j)
+    fluxes%latent(i,j) = QL(i,j) * G%mask2dT(i,j)
+  enddo ; enddo
+
+  
+  ! this is missing radiative and freshwater fluxes for buoyancy
+  ! and wind gust for momentum
+
+  call pass_vector(forces%taux, forces%tauy, G%Domain, To_All)
+
+  call callTree_leave("forcing_by_aerobulk")
+end subroutine forcing_by_aerobulk
+
+
+
+
+
+
+
+
+
 
 !> Translate the wind stresses into the friction velocity, including effects of background gustiness.
 subroutine stresses_to_ustar(forces, G, US, CS)
@@ -1804,6 +1921,28 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, tracer_flow_C
                  "or blank to get ustar from the wind stresses plus the "//&
                  "gustiness.", default=" ")
     CS%wind_file = trim(CS%inputdir) // trim(CS%wind_file)
+  endif
+  if (trim(CS%wind_config) == "aerobulk") then
+
+    call get_param(param_file, mdl, "AEROBULK_ALGO", CS%bulk_algo, &
+                 "Algorithm used to compute momentum, latent and sensible heat fluxes.", &
+                 default="ncar")
+    call get_param(param_file, mdl, "AEROBULK_HUMIDITY", CS%humidity_type, &
+                 "Humidity type passed to aerobulk module. User can pass either", &
+                 "specific humidity (sh), dewpoint (dp) or relative humidity (rh).", &
+                 default="sh")
+    call get_param(param_file, mdl, "AEROBULK_HREF_WIND", CS%ref_height_wind, &
+                 "Reference height for wind passed to aerobulk module", &
+                 default=10., units="m")
+    call get_param(param_file, mdl, "AEROBULK_HREF_TEMP", CS%ref_height_temp, &
+                 "Reference height for air temperature passed to aerobulk module", &
+                 default=10., units="m")
+    call get_param(param_file, mdl, "AEROBULK_HREF_HUM", CS%ref_height_hum, &
+                 "Reference height for humidity passed to aerobulk module", &
+                 default=10., units="m")
+    call get_param(param_file, mdl, "AEROBULK_USE_SKIN_TEMP", CS%use_skin_schemes, &
+                 "If true, use skin temperature algo in aerobulk module.", &
+                 default=.false.)
   endif
   if (trim(CS%wind_config) == "gyres") then
     call get_param(param_file, mdl, "TAUX_CONST", CS%gyres_taux_const, &
