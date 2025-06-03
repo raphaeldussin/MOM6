@@ -3404,6 +3404,7 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   real    :: HZ2_T3_to_W_m2     ! unit conversion factor for TKE from internal to mks [H Z2 T-3 ~> m3 s-3 or W m-2]
   real    :: W_m2_to_HZ2_T3     ! unit conversion factor for TKE from mks to internal [m3 s-3 or W m-2 ~> H Z2 T-3]
   real    :: J_m2_to_HZ2_T2     ! unit conversion factor for Energy from mks to internal [m3 s-2 or J m-2 ~> H Z2 T-2]
+  real    :: wave_drag_effic    ! an efficiency factor for wave drag loss [nondim]
   integer :: num_angle, num_freq, num_mode, m, fr
   integer :: isd, ied, jsd, jed, a, id_ang, i, j, nz
   type(axes_grp) :: axes_ang
@@ -3656,6 +3657,9 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
                  "The slope decay scale away from the bottom for tidal TKE with "//&
                  "the new coding when INT_TIDE_DISSIPATION is used.", &
                  units="m", default=100.0, scale=GV%m_to_H)
+  call get_param(param_file, mdl, "WAVEDRAG_EFFIC", wave_drag_effic, &
+                 "An efficiency factor for the wave drag loss ", &
+                 units="nondim", default=1.0)
 
   ! Allocate various arrays needed for loss rates
   allocate(h2(isd:ied,jsd:jed), source=0.0)
@@ -3739,7 +3743,8 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
     ! Compute the fixed part; units are [R Z4 H-1 L-2 ~> kg m-2 or m] here
     ! will be multiplied by N and the squared near-bottom velocity (and by the
     ! near-bottom density in non-Boussinesq mode) to get into [H Z2 T-3 ~> m3 s-3 or W m-2]
-    CS%TKE_itidal_loss_fixed(i,j) = 0.5*kappa_h2_factor* GV%H_to_RZ * US%L_to_Z*kappa_itides * h2(i,j)
+    CS%TKE_itidal_loss_fixed(i,j) = 0.5*kappa_h2_factor* GV%H_to_RZ * US%L_to_Z*kappa_itides * &
+                                    wave_drag_effic * h2(i,j)
   enddo ; enddo
 
   deallocate(h2)
