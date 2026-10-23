@@ -75,6 +75,8 @@ type, public :: int_tide_CS ; private
   logical :: use_slopeloss_bug = .false. !< If true, the calculation of the residual of tranmission
                                          !! and reflection is wrong, leading to overestimation of
                                          !! slope loss
+  logical :: use_quad_bottom_drag = .true. !< If false, use simple linear drag (recommended).
+                                           !! If True, use original formulation.
   real, allocatable, dimension(:,:) :: fraction_tidal_input
                         !< how the energy from one tidal component is distributed
                         !! over the various vertical modes, 2d in frequency and mode [nondim]
@@ -762,6 +764,52 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
     enddo ; enddo
   endif
 
+  ! Extract the energy for mixing due to scattering (wave-drag)--------------------
+  ! still need to allow a portion of the extracted energy to go to higher modes.
+  ! First, find velocity profiles
+  if (CS%apply_wave_drag .or. CS%apply_Froude_drag .or. CS%apply_bottom_drag) then
+    do m=1,CS%nMode ; do fr=1,CS%Nfreq
+
+      ! compute near-bottom and max horizontal baroclinic velocity values at each point
+      do j=js,je ; do i=is,ie
+        id_g = i + G%idg_offset ; jd_g = j + G%jdg_offset ! for debugging
+
+        ! Calculate wavenumber magnitude
+        freq2 = CS%frequency(fr)**2
+
+        f2 = (0.25*(G%CoriolisBu(I,J) + G%CoriolisBu(max(I-1,1),max(J-1,1)) + &
+                    G%CoriolisBu(I,max(J-1,1)) + G%CoriolisBu(max(I-1,1),J)))**2
+        Kmag2 = (freq2 - f2) / ((cn(i,j,m)**2) + (cn_subRO**2))
+
+
+        ! Back-calculate amplitude from energy equation
+        if ( (G%mask2dT(i,j) > 0.5) .and. (freq2*Kmag2 > 0.0)) then
+          ! Units here are [R Z ~> kg m-2]
+          KE_term = 0.25*GV%H_to_RZ*( (((freq2 + f2) / (freq2*Kmag2))*US%L_to_Z**2*CS%int_U2(i,j,m)) + &
+                                   CS%int_w2(i,j,m) )
+          PE_term = 0.25*GV%H_to_RZ*( CS%int_N2w2(i,j,m) / freq2 )
+
+          if (KE_term + PE_term > 0.0) then
+            W0 = sqrt( GV%H_to_RZ * tot_En_mode(i,j,fr,m) / (KE_term + PE_term) )
+          else
+            !call MOM_error(WARNING, "MOM internal tides: KE + PE <= 0.0; setting to W0 to 0.0")
+            W0 = 0.0
+          endif
+
+          U_mag = W0 * sqrt((freq2 + f2) / (2.0*freq2*Kmag2))
+          ! scaled maximum tidal velocity
+          Umax(i,j,fr,m) = abs(U_mag * CS%u_struct_max(i,j,m))
+          ! scaled bottom tidal velocity
+          Ub(i,j,fr,m) = abs(U_mag * CS%u_struct_bot(i,j,m))
+        else
+          Umax(i,j,fr,m) = 0.
+          Ub(i,j,fr,m) = 0.
+        endif
+
+      enddo ; enddo ! i-loop, j-loop
+    enddo ; enddo ! fr-loop, m-loop
+  endif ! apply_wave, bottom or _Froude_drag (Ub or Umax needed)
+
   ! Extract the energy for mixing due to bottom drag-------------------------------
   if (CS%apply_bottom_drag) then
     do j=jsd,jed ; do i=isd,ied ; htot(i,j) = 0.0 ; enddo ; enddo
@@ -777,20 +825,37 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
     enddo ; enddo ; enddo
     if (GV%Boussinesq) then
       ! This is mathematically equivalent to the form in the option below, but they differ at roundoff.
-      do m=1,CS%NMode ; do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
-        I_D_here = 1.0 / (max(htot(i,j), CS%drag_min_depth))
-        drag_scale(i,j,fr,m) = CS%cdrag * sqrt(max(0.0, US%L_to_Z**2*tot_vel_btTide2(i,j) + &
-                             (tot_En_mode(i,j,fr,m) * I_D_here))) * GV%Z_to_H*I_D_here
-      enddo ; enddo ; enddo ; enddo
+      if (CS%use_quad_bottom_drag) then
+        do m=1,CS%NMode ; do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
+          I_D_here = 1.0 / (max(htot(i,j), CS%drag_min_depth))
+          drag_scale(i,j,fr,m) = CS%cdrag * sqrt(max(0.0, US%L_to_Z**2*tot_vel_btTide2(i,j) + &
+                               (tot_En_mode(i,j,fr,m) * I_D_here))) * GV%Z_to_H*I_D_here
+        enddo ; enddo ; enddo ; enddo
+      else ! linear bottom drag
+        do m=1,CS%NMode ; do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
+          I_D_here = 1.0 / (max(htot(i,j), CS%drag_min_depth))
+          drag_scale(i,j,fr,m) = CS%cdrag * abs(max(0.0, US%L_to_Z*Ub(i,j,fr,m))) * GV%Z_to_H*I_D_here
+        enddo ; enddo ; enddo ; enddo
+      endif ! old drag
     else
-      do m=1,CS%NMode ; do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
-        I_D_here = 1.0 / (max(htot(i,j), CS%drag_min_depth))
-        I_mass = GV%RZ_to_H * I_D_here
-        drag_scale(i,j,fr,m) = (CS%cdrag * (Rho_bot(i,j)*I_mass)) * &
-                              sqrt(max(0.0, US%L_to_Z**2*tot_vel_btTide2(i,j) + &
-                                            (tot_En_mode(i,j,fr,m) * I_D_here)))
-      enddo ; enddo ; enddo ; enddo
-    endif
+      if (CS%use_quad_bottom_drag) then
+        do m=1,CS%NMode ; do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
+          I_D_here = 1.0 / (max(htot(i,j), CS%drag_min_depth))
+          I_mass = GV%RZ_to_H * I_D_here
+          drag_scale(i,j,fr,m) = (CS%cdrag * (Rho_bot(i,j)*I_mass)) * &
+                                sqrt(max(0.0, US%L_to_Z**2*tot_vel_btTide2(i,j) + &
+                                              (tot_En_mode(i,j,fr,m) * I_D_here)))
+        enddo ; enddo ; enddo ; enddo
+      else ! linear bottom drag
+        do m=1,CS%NMode ; do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
+          I_D_here = 1.0 / (max(htot(i,j), CS%drag_min_depth))
+          I_mass = GV%RZ_to_H * I_D_here
+          drag_scale(i,j,fr,m) = (CS%cdrag * (Rho_bot(i,j)*I_mass)) * &
+                                abs(max(0.0, US%L_to_Z*Ub(i,j,fr,m)))
+        enddo ; enddo ; enddo ; enddo
+
+      endif ! old drag
+    endif ! boussinesq
 
     if (CS%debug) call hchksum(drag_scale(:,:,1,1), "dragscale", G%HI, haloshift=0, unscale=US%s_to_T)
     if (CS%debug) call hchksum(tot_vel_btTide2(:,:), "tot_vel_btTide2", G%HI, haloshift=0, unscale=US%L_T_to_m_s**2)
@@ -840,51 +905,6 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
     enddo ; enddo ; enddo
   endif
 
-  ! Extract the energy for mixing due to scattering (wave-drag)--------------------
-  ! still need to allow a portion of the extracted energy to go to higher modes.
-  ! First, find velocity profiles
-  if (CS%apply_wave_drag .or. CS%apply_Froude_drag) then
-    do m=1,CS%nMode ; do fr=1,CS%Nfreq
-
-      ! compute near-bottom and max horizontal baroclinic velocity values at each point
-      do j=js,je ; do i=is,ie
-        id_g = i + G%idg_offset ; jd_g = j + G%jdg_offset ! for debugging
-
-        ! Calculate wavenumber magnitude
-        freq2 = CS%frequency(fr)**2
-
-        f2 = (0.25*(G%CoriolisBu(I,J) + G%CoriolisBu(max(I-1,1),max(J-1,1)) + &
-                    G%CoriolisBu(I,max(J-1,1)) + G%CoriolisBu(max(I-1,1),J)))**2
-        Kmag2 = (freq2 - f2) / ((cn(i,j,m)**2) + (cn_subRO**2))
-
-
-        ! Back-calculate amplitude from energy equation
-        if ( (G%mask2dT(i,j) > 0.5) .and. (freq2*Kmag2 > 0.0)) then
-          ! Units here are [R Z ~> kg m-2]
-          KE_term = 0.25*GV%H_to_RZ*( (((freq2 + f2) / (freq2*Kmag2))*US%L_to_Z**2*CS%int_U2(i,j,m)) + &
-                                   CS%int_w2(i,j,m) )
-          PE_term = 0.25*GV%H_to_RZ*( CS%int_N2w2(i,j,m) / freq2 )
-
-          if (KE_term + PE_term > 0.0) then
-            W0 = sqrt( GV%H_to_RZ * tot_En_mode(i,j,fr,m) / (KE_term + PE_term) )
-          else
-            !call MOM_error(WARNING, "MOM internal tides: KE + PE <= 0.0; setting to W0 to 0.0")
-            W0 = 0.0
-          endif
-
-          U_mag = W0 * sqrt((freq2 + f2) / (2.0*freq2*Kmag2))
-          ! scaled maximum tidal velocity
-          Umax(i,j,fr,m) = abs(U_mag * CS%u_struct_max(i,j,m))
-          ! scaled bottom tidal velocity
-          Ub(i,j,fr,m) = abs(U_mag * CS%u_struct_bot(i,j,m))
-        else
-          Umax(i,j,fr,m) = 0.
-          Ub(i,j,fr,m) = 0.
-        endif
-
-      enddo ; enddo ! i-loop, j-loop
-    enddo ; enddo ! fr-loop, m-loop
-  endif ! apply_wave or _Froude_drag (Ub or Umax needed)
   ! Finally, apply loss
   if (CS%apply_wave_drag) then
     ! Calculate loss rate and apply loss over the time step
@@ -3631,6 +3651,9 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   call get_param(param_file, mdl, "INTTIDES_SLOPELOSS_BUG", CS%use_slopeloss_bug, &
                  "If true, slope loss is overestimated because of wrong calculation of residual"//&
                  "of the transmission and reflection", default=enable_bugs)
+  call get_param(param_file, mdl, "USE_QUAD_BOTTOM_DRAG", CS%use_quad_bottom_drag, &
+                 "If true, bottom drag is computed from barotropic tides + mode energy."//&
+                 "If False, a simpler linear form using bottom velocity is used.", default=.true.)
   call get_param(param_file, mdl, "KD_MIN", CS%Kd_min, &
                  "The minimum diapycnal diffusivity.", &
                  units="m2 s-1", default=2e-6, scale=GV%m2_s_to_HZ_T)
