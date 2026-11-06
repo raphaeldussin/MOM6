@@ -77,6 +77,8 @@ type, public :: int_tide_CS ; private
                                          !! slope loss
   logical :: use_quad_bottom_drag = .true. !< If false, use simple linear drag (recommended).
                                            !! If True, use original formulation.
+  logical :: use_old_quad_bottom_drag = .true. !< If false, use simple quadratic drag (recommended).
+                                               !! If True, use original formulation.
   real, allocatable, dimension(:,:) :: fraction_tidal_input
                         !< how the energy from one tidal component is distributed
                         !! over the various vertical modes, 2d in frequency and mode [nondim]
@@ -768,6 +770,16 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
   ! still need to allow a portion of the extracted energy to go to higher modes.
   ! First, find velocity profiles
   if (CS%apply_wave_drag .or. CS%apply_Froude_drag .or. CS%apply_bottom_drag) then
+    ! total energy may have changed after previous loss term was applied, update
+    tot_En(:,:) = 0.0
+    tot_En_mode(:,:,:,:) = 0.0
+    do m=1,CS%nMode ; do fr=1,CS%Nfreq
+      do j=js,je ; do i=is,ie ; do a=1,CS%nAngle
+        tot_En(i,j) = tot_En(i,j) + CS%En(i,j,a,fr,m)
+        tot_En_mode(i,j,fr,m) = tot_En_mode(i,j,fr,m) + CS%En(i,j,a,fr,m)
+      enddo ; enddo ; enddo
+    enddo ; enddo
+
     do m=1,CS%nMode ; do fr=1,CS%Nfreq
 
       ! compute near-bottom and max horizontal baroclinic velocity values at each point
@@ -825,20 +837,25 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
     enddo ; enddo ; enddo
     if (GV%Boussinesq) then
       ! This is mathematically equivalent to the form in the option below, but they differ at roundoff.
-      if (CS%use_quad_bottom_drag) then
+      if (CS%use_quad_bottom_drag .and. CS%use_old_quad_bottom_drag) then
         do m=1,CS%NMode ; do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
           I_D_here = 1.0 / (max(htot(i,j), CS%drag_min_depth))
           drag_scale(i,j,fr,m) = CS%cdrag * sqrt(max(0.0, US%L_to_Z**2*tot_vel_btTide2(i,j) + &
                                (tot_En_mode(i,j,fr,m) * I_D_here))) * GV%Z_to_H*I_D_here
         enddo ; enddo ; enddo ; enddo
+      elseif (CS%use_quad_bottom_drag) then
+        do m=1,CS%NMode ; do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
+          drag_scale(i,j,fr,m) = (((((CS%cdrag*US%L_to_Z**3)*GV%Z_to_H)*Ub(i,j,fr,m)) * &
+                                 Ub(i,j,fr,m))*Ub(i,j,fr,m)) ! not T-1 units but W/m2
+        enddo ; enddo ; enddo ; enddo
       else ! linear bottom drag
         do m=1,CS%NMode ; do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
           I_D_here = 1.0 / (max(htot(i,j), CS%drag_min_depth))
-          drag_scale(i,j,fr,m) = CS%cdrag * abs(max(0.0, US%L_to_Z*Ub(i,j,fr,m))) * GV%Z_to_H*I_D_here
+          drag_scale(i,j,fr,m) = (((CS%cdrag*US%L_to_Z)*Ub(i,j,fr,m))*GV%Z_to_H)*I_D_here
         enddo ; enddo ; enddo ; enddo
       endif ! old drag
     else
-      if (CS%use_quad_bottom_drag) then
+      if (CS%use_quad_bottom_drag .and. CS%use_old_quad_bottom_drag) then
         do m=1,CS%NMode ; do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
           I_D_here = 1.0 / (max(htot(i,j), CS%drag_min_depth))
           I_mass = GV%RZ_to_H * I_D_here
@@ -846,12 +863,20 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
                                 sqrt(max(0.0, US%L_to_Z**2*tot_vel_btTide2(i,j) + &
                                               (tot_En_mode(i,j,fr,m) * I_D_here)))
         enddo ; enddo ; enddo ; enddo
+      elseif (CS%use_quad_bottom_drag) then
+        do m=1,CS%NMode ; do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
+          I_D_here = 1.0 / (max(htot(i,j), CS%drag_min_depth))
+          I_mass = GV%RZ_to_H * I_D_here
+          !drag_scale(i,j,fr,m) = ((((((CS%cdrag*(Rho_bot(i,j)*I_mass)) * &
+          !                       US%L_to_Z**3)*GV%Z_to_H)*Ub(i,j,fr,m)) * &
+          !                       Ub(i,j,fr,m))*Ub(i,j,fr,m))/tot_En_mode(i,j,fr,m)
+        enddo ; enddo ; enddo ; enddo
       else ! linear bottom drag
         do m=1,CS%NMode ; do fr=1,CS%Nfreq ; do j=jsd,jed ; do i=isd,ied
           I_D_here = 1.0 / (max(htot(i,j), CS%drag_min_depth))
           I_mass = GV%RZ_to_H * I_D_here
-          drag_scale(i,j,fr,m) = (CS%cdrag * (Rho_bot(i,j)*I_mass)) * &
-                                abs(max(0.0, US%L_to_Z*Ub(i,j,fr,m)))
+          drag_scale(i,j,fr,m) = ((CS%cdrag * (Rho_bot(i,j)*I_mass)) * &
+                                US%L_to_Z)*Ub(i,j,fr,m)
         enddo ; enddo ; enddo ; enddo
 
       endif ! old drag
@@ -864,7 +889,14 @@ subroutine propagate_int_tide(h, tv, Nb, Rho_bot, dt, G, GV, US, inttide_input_C
       ! Calculate loss rate and apply loss over the time step ; apply the same drag timescale
       ! to each En component (technically not correct; fix later)
       En_b = CS%En(i,j,a,fr,m)
-      En_a = CS%En(i,j,a,fr,m) / (1.0 + (dt * drag_scale(i,j,fr,m))) ! implicit update
+      if (CS%use_quad_bottom_drag) then
+        ! explicit scheme
+        !En_a = max(En_b - dt * drag_scale(i,j,fr,m), 0.)
+        ! implicit scheme
+        En_a = (En_b*En_b)/(En_b + dt*drag_scale(i,j,fr,m) + 1e-15)
+      else ! implicit for linear drag
+        En_a = CS%En(i,j,a,fr,m) / (1.0 + (dt * drag_scale(i,j,fr,m))) ! implicit update
+      endif
       CS%TKE_quad_loss(i,j,a,fr,m)  = (En_b - En_a) * I_dt
       CS%En(i,j,a,fr,m) = En_a
     enddo ; enddo ; enddo ; enddo ; enddo
@@ -3654,6 +3686,9 @@ subroutine internal_tides_init(Time, G, GV, US, param_file, diag, CS)
   call get_param(param_file, mdl, "USE_QUAD_BOTTOM_DRAG", CS%use_quad_bottom_drag, &
                  "If true, bottom drag is computed from barotropic tides + mode energy."//&
                  "If False, a simpler linear form using bottom velocity is used.", default=.true.)
+  call get_param(param_file, mdl, "USE_OLD_QUAD_BOTTOM_DRAG", CS%use_old_quad_bottom_drag, &
+                 "If true, bottom drag is computed from barotropic tides + mode energy."//&
+                 "If False, a simpler quadratic form using bottom velocity is used.", default=.true.)
   call get_param(param_file, mdl, "KD_MIN", CS%Kd_min, &
                  "The minimum diapycnal diffusivity.", &
                  units="m2 s-1", default=2e-6, scale=GV%m2_s_to_HZ_T)
